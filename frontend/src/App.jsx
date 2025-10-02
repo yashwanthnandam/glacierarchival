@@ -1,0 +1,1 @@
+React Router, Material-UI theme, routes for login, register, dashboard with PrivateRoute protection

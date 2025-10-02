@@ -1,0 +1,1 @@
+Authentication check using localStorage token
