@@ -1,0 +1,1 @@
+Django URL configuration with DefaultRouter registering media-files, archive-jobs, s3-config endpoints and auth routes for register, login, and token refresh using JWT

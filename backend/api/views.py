@@ -1,0 +1,1 @@
+Complete Django REST Framework viewsets for MediaFileViewSet with upload/archive/restore actions, ArchiveJobViewSet with stats endpoint, S3ConfigViewSet, and register_user API view with JWT authentication, boto3 S3 client integration, and error handling

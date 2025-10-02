@@ -1,0 +1,1 @@
+Complete registration form and validation

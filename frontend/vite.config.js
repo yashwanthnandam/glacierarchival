@@ -1,0 +1,1 @@
+Vite configuration with React plugin and dev server on port 5173 with API proxy to localhost:8000
