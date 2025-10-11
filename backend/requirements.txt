@@ -6,3 +6,4 @@ boto3
 python-dotenv
 Pillow
 psycopg2-binary
+cryptography
