@@ -1,0 +1,14 @@
+# Glacier Archival System - Scheduled Tasks
+# Add these lines to your crontab (crontab -e)
+
+# Run auto-hibernation every day at 2 AM
+0 2 * * * cd /path/to/glacierarchival && python manage.py auto_hibernate --days=30 --min-size=10485760
+
+# Run cleanup every Sunday at 3 AM
+0 3 * * 0 cd /path/to/glacierarchival && python manage.py cleanup_orphaned_files
+
+# Run all scheduled tasks every day at 1 AM
+0 1 * * * cd /path/to/glacierarchival && python manage.py run_scheduled_tasks
+
+# Calculate costs in INR every Monday at 4 AM
+0 4 * * 1 cd /path/to/glacierarchival && python manage.py calculate_costs_inr

@@ -1,0 +1,167 @@
+// Shared Material-UI imports to reduce bundle size and eliminate duplication
+export {
+  // Layout
+  Box,
+  Container,
+  Grid,
+  Stack,
+  Paper,
+  Card,
+  CardContent,
+  CardActions,
+  Divider,
+  
+  // Typography
+  Typography,
+  
+  // Inputs
+  TextField,
+  Button,
+  IconButton,
+  Checkbox,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+  FormControlLabel,
+  InputAdornment,
+  Autocomplete,
+  
+  // Navigation
+  AppBar,
+  Toolbar,
+  Drawer,
+  SwipeableDrawer,
+  Tabs,
+  Tab,
+  Breadcrumbs,
+  Link,
+  Pagination,
+  
+  // Feedback
+  Alert,
+  Snackbar,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Tooltip,
+  CircularProgress,
+  LinearProgress,
+  Chip,
+  Badge,
+  
+  // Data Display
+  List,
+  ListItem,
+  ListItemIcon,
+  ListItemText,
+  ListItemSecondaryAction,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  TablePagination,
+  Avatar,
+  
+  // Surfaces
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
+  Collapse,
+  Menu,
+  Fab,
+  
+  // Utils
+  useMediaQuery,
+  useTheme,
+  ClickAwayListener,
+  Popper,
+  Fade,
+  Slider,
+  alpha
+} from '@mui/material';
+
+export {
+  // Common icons
+  Menu as MenuIcon,
+  Search,
+  Add,
+  Edit,
+  Delete,
+  MoreVert,
+  ExpandMore,
+  ExpandLess,
+  ChevronRight,
+  NavigateNext,
+  Home,
+  Refresh,
+  Close,
+  Check,
+  Clear,
+  FilterList,
+  History,
+  TrendingUp,
+  TrendingDown,
+  Star,
+  Schedule,
+  Speed,
+  Storage,
+  Money,
+  Info,
+  Warning,
+  CheckCircle,
+  Error,
+  AutoAwesome,
+  Assessment,
+  Dashboard,
+  
+  // File and folder icons
+  Folder,
+  FolderOpen,
+  InsertDriveFile,
+  Image,
+  VideoFile,
+  AudioFile,
+  Description,
+  Code,
+  Archive as ArchiveIcon,
+  CloudDownload,
+  CloudUpload,
+  CloudDone,
+  CloudSync,
+  CloudOff,
+  Archive,
+  RestoreFromTrash,
+  AcUnit,
+  
+  // Action icons
+  Download,
+  Upload,
+  Share,
+  Settings,
+  Notifications,
+  Logout,
+  CreateNewFolder,
+  SelectAll,
+  Pause,
+  PlayArrow,
+  Stop,
+  
+  // UI icons
+  PieChart,
+  BarChart,
+  Timeline,
+  CurrencyRupee,
+  Lock,
+  Visibility,
+  VisibilityOff,
+  Security,
+  
+  // Additional icons
+  WbSunny,
+  CloudQueue,
+  Diamond
+} from '@mui/icons-material';
