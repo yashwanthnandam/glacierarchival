@@ -118,27 +118,72 @@ export const validateFileCollection = (files) => {
 };
 
 /**
- * Pre-upload storage check
+ * Pre-upload storage check using API
  */
-export const checkStorageLimit = async (fileSize, currentUsage = 0) => {
-  const totalUsage = currentUsage + fileSize;
-  const freeTierLimit = 15 * 1024 * 1024 * 1024; // 15GB
+export const checkStorageLimit = async (fileSize) => {
+  try {
+    // Import API here to avoid circular dependencies
+    const { hibernationAPI } = await import('../services/api');
+    
+    // Get current storage usage from API
+    const response = await hibernationAPI.getStorageUsage();
+    const storageData = response.data;
+    
+    const totalUsage = storageData.current_usage_bytes + fileSize;
+    
+    if (totalUsage > storageData.limit_bytes) {
+      const currentUsageGB = storageData.current_usage_gb;
+      const fileSizeGB = fileSize / (1024**3);
+      const remainingGB = storageData.remaining_gb;
+      
+      return {
+        canUpload: false,
+        error: {
+          type: 'STORAGE_LIMIT_EXCEEDED',
+          message: `Storage limit exceeded! You've used ${currentUsageGB}GB of your ${storageData.limit_gb}GB ${storageData.plan_type === 'free_tier' ? 'free tier' : storageData.plan_name}. This upload would add ${fileSizeGB.toFixed(1)}GB, but you only have ${remainingGB}GB remaining.`,
+          details: `Current usage: ${formatBytes(storageData.current_usage_bytes)}, adding ${formatBytes(fileSize)} would exceed the ${formatBytes(storageData.limit_bytes)} limit`,
+          currentUsageGB: currentUsageGB,
+          fileSizeGB: fileSizeGB.toFixed(1),
+          remainingGB: remainingGB,
+          planType: storageData.plan_type,
+          planName: storageData.plan_name,
+          limitGB: storageData.limit_gb,
+          upgradeRequired: true
+        }
+      };
+    }
 
-  if (totalUsage > freeTierLimit) {
     return {
-      canUpload: false,
-      error: {
-        type: 'STORAGE_LIMIT_EXCEEDED',
-        message: MESSAGES.STORAGE_LIMIT_EXCEEDED,
-        details: `Current usage: ${formatBytes(currentUsage)}, adding ${formatBytes(fileSize)} would exceed the ${formatBytes(freeTierLimit)} free tier limit`
-      }
+      canUpload: true,
+      remainingSpace: storageData.remaining_bytes - fileSize,
+      storageData: storageData
+    };
+    
+  } catch (error) {
+    console.error('Error checking storage limit:', error);
+    
+    // Fallback to basic check if API fails
+    const freeTierLimit = 15 * 1024 * 1024 * 1024; // 15GB
+    const fileSizeGB = fileSize / (1024**3);
+    
+    if (fileSize > freeTierLimit) {
+      return {
+        canUpload: false,
+        error: {
+          type: 'STORAGE_LIMIT_EXCEEDED',
+          message: `File size ${fileSizeGB.toFixed(1)}GB exceeds the 15GB free tier limit. Please upgrade to a hibernation plan.`,
+          details: `File size: ${formatBytes(fileSize)}, Free tier limit: ${formatBytes(freeTierLimit)}`,
+          fileSizeGB: fileSizeGB.toFixed(1),
+          upgradeRequired: true
+        }
+      };
+    }
+    
+    return {
+      canUpload: true,
+      remainingSpace: freeTierLimit - fileSize
     };
   }
-
-  return {
-    canUpload: true,
-    remainingSpace: freeTierLimit - totalUsage
-  };
 };
 
 /**

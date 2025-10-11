@@ -146,6 +146,9 @@ export const hibernationAPI = {
   // Get user's current hibernation plan
   getCurrentPlan: () => api.get('user-hibernation-plans/current_plan/'),
   
+  // Get detailed storage usage information
+  getStorageUsage: () => api.get('user-hibernation-plans/storage_usage/'),
+  
   // Subscribe to a hibernation plan
   subscribe: (planId) => api.post('user-hibernation-plans/subscribe/', { plan_id: planId }),
   

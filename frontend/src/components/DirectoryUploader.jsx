@@ -29,6 +29,7 @@ import {
   Refresh,
   Stop
 } from '@mui/icons-material';
+import StorageLimitError from './StorageLimitError';
 import { uppyAPI } from '../services/api';
 import uploadManager from '../services/uploadManager';
 import secureTokenStorage from '../utils/secureTokenStorage';
@@ -1243,18 +1244,38 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
           {/* Validation Errors */}
           {validationErrors.length > 0 && (
             <Box sx={{ mt: 2 }}>
-              {validationErrors.map((error, index) => (
-                <Alert key={index} severity="error" sx={{ mb: 1 }}>
-                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                    {error.message}
-                  </Typography>
-                  {error.details && (
-                    <Typography variant="caption" sx={{ display: 'block', mt: 0.5 }}>
-                      {error.details}
+              {validationErrors.map((error, index) => {
+                // Use StorageLimitError component for storage limit errors
+                if (error.type === 'STORAGE_LIMIT_EXCEEDED') {
+                  return (
+                    <StorageLimitError
+                      key={index}
+                      error={error}
+                      onDismiss={() => {
+                        setValidationErrors(prev => prev.filter((_, i) => i !== index));
+                      }}
+                      onUpgrade={() => {
+                        // Navigate to plans page
+                        window.location.href = '/plans';
+                      }}
+                    />
+                  );
+                }
+                
+                // Use regular Alert for other errors
+                return (
+                  <Alert key={index} severity="error" sx={{ mb: 1 }}>
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                      {error.message}
                     </Typography>
-                  )}
-                </Alert>
-              ))}
+                    {error.details && (
+                      <Typography variant="caption" sx={{ display: 'block', mt: 0.5 }}>
+                        {error.details}
+                      </Typography>
+                    )}
+                  </Alert>
+                );
+              })}
             </Box>
           )}
 

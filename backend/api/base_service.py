@@ -58,15 +58,24 @@ class BaseService:
             free_tier_limit_bytes = 15 * 1024 * 1024 * 1024  # 15GB
             
             if (total_storage_bytes + additional_bytes) > free_tier_limit_bytes:
-                used_gb = total_storage_bytes / (1024**3)
-                limit_gb = free_tier_limit_bytes / (1024**3)
+                current_usage_gb = total_storage_bytes / (1024**3)
+                additional_gb = additional_bytes / (1024**3)
+                remaining_gb = max(0, (free_tier_limit_bytes - total_storage_bytes) / (1024**3))
+                
                 raise APIError(
-                    f"Free tier limit exceeded. You have used {used_gb:.1f}GB of your {limit_gb:.0f}GB free allowance. Please subscribe to a hibernation plan to continue.",
+                    f"Storage limit exceeded! You've used {current_usage_gb:.1f}GB of your 15GB free tier. "
+                    f"This upload would add {additional_gb:.1f}GB, but you only have {remaining_gb:.1f}GB remaining. "
+                    f"Please upgrade to a hibernation plan to continue uploading.",
                     402,
                     {
                         'plan_required': True,
                         'free_tier_used': total_storage_bytes,
-                        'free_tier_limit': free_tier_limit_bytes
+                        'free_tier_limit': free_tier_limit_bytes,
+                        'additional_size': additional_bytes,
+                        'current_usage_gb': round(current_usage_gb, 1),
+                        'additional_gb': round(additional_gb, 1),
+                        'remaining_gb': round(remaining_gb, 1),
+                        'upgrade_message': 'Upgrade to a hibernation plan to get more storage space.'
                     }
                 )
             
@@ -100,12 +109,39 @@ class BaseService:
         
         # Check plan-specific limits
         plan = user_plan.plan
+        current_usage = user_plan.storage_used_bytes
+        plan_limit = user_plan.plan.storage_size_bytes
+        
+        # Check if adding this file would exceed plan limit
+        if (current_usage + file_size) > plan_limit:
+            current_usage_gb = current_usage / (1024**3)
+            file_size_gb = file_size / (1024**3)
+            plan_limit_gb = plan_limit / (1024**3)
+            remaining_gb = max(0, (plan_limit - current_usage) / (1024**3))
+            
+            raise APIError(
+                f"Storage limit exceeded for your {plan.name} plan! You've used {current_usage_gb:.1f}GB of your {plan_limit_gb:.0f}GB allowance. "
+                f"This upload would add {file_size_gb:.1f}GB, but you only have {remaining_gb:.1f}GB remaining. "
+                f"Please upgrade to a higher plan or delete some files to continue.",
+                402,
+                {
+                    'plan_required': True,
+                    'current_plan': plan.name,
+                    'current_usage_gb': round(current_usage_gb, 1),
+                    'file_size_gb': round(file_size_gb, 1),
+                    'plan_limit_gb': round(plan_limit_gb, 0),
+                    'remaining_gb': round(remaining_gb, 1),
+                    'upgrade_message': f'Upgrade to a higher plan to get more storage space.'
+                }
+            )
+        
+        # Check individual file size limits for specific tiers
         if plan.storage_tier == '100gb' and file_size > 100 * 1024 * 1024 * 1024:
-            raise APIError("File size exceeds 100GB plan limit", 400)
+            raise APIError("Individual file size cannot exceed 100GB. Please split the file or upgrade to a higher plan.", 400)
         elif plan.storage_tier == '500gb' and file_size > 500 * 1024 * 1024 * 1024:
-            raise APIError("File size exceeds 500GB plan limit", 400)
+            raise APIError("Individual file size cannot exceed 500GB. Please split the file or upgrade to a higher plan.", 400)
         elif plan.storage_tier == '1tb' and file_size > 1024 * 1024 * 1024 * 1024:
-            raise APIError("File size exceeds 1TB plan limit", 400)
+            raise APIError("Individual file size cannot exceed 1TB. Please split the file or upgrade to a higher plan.", 400)
         
         return True
     

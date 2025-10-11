@@ -1366,6 +1366,8 @@ class UserHibernationPlanViewSet(viewsets.ModelViewSet):
                 free_tier_used_gb = total_storage_bytes / (1024**3)
                 free_tier_limit_gb = free_tier_limit_bytes / (1024**3)
                 free_tier_used_percentage = (total_storage_bytes / free_tier_limit_bytes) * 100
+                remaining_bytes = max(0, free_tier_limit_bytes - total_storage_bytes)
+                remaining_gb = remaining_bytes / (1024**3)
                 
                 return Response({
                     'is_free_tier': True,
@@ -1374,6 +1376,8 @@ class UserHibernationPlanViewSet(viewsets.ModelViewSet):
                     'storage_limit_bytes': free_tier_limit_bytes,
                     'storage_limit_gb': free_tier_limit_gb,
                     'storage_used_percentage': round(free_tier_used_percentage, 1),
+                    'remaining_bytes': remaining_bytes,
+                    'remaining_gb': round(remaining_gb, 2),
                     'retrieval_used_gb': 0,
                     'retrieval_remaining_gb': 0,
                     'retrieval_limit_gb': 0,
@@ -1383,6 +1387,60 @@ class UserHibernationPlanViewSet(viewsets.ModelViewSet):
             
             serializer = UserHibernationPlanSerializer(user_plan)
             return Response(serializer.data)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    @action(detail=False, methods=['get'])
+    def storage_usage(self, request):
+        """Get detailed storage usage information"""
+        try:
+            user_plan = UserHibernationPlan.objects.filter(
+                user=request.user, 
+                is_active=True
+            ).first()
+            
+            if not user_plan:
+                # Free tier usage
+                total_storage_bytes = MediaFile.objects.filter(
+                    user=request.user, 
+                    is_deleted=False
+                ).aggregate(total=Sum('file_size'))['total'] or 0
+                
+                free_tier_limit_bytes = 15 * 1024 * 1024 * 1024  # 15GB
+                remaining_bytes = max(0, free_tier_limit_bytes - total_storage_bytes)
+                
+                return Response({
+                    'plan_type': 'free_tier',
+                    'current_usage_bytes': total_storage_bytes,
+                    'current_usage_gb': round(total_storage_bytes / (1024**3), 2),
+                    'limit_bytes': free_tier_limit_bytes,
+                    'limit_gb': 15,
+                    'remaining_bytes': remaining_bytes,
+                    'remaining_gb': round(remaining_bytes / (1024**3), 2),
+                    'usage_percentage': round((total_storage_bytes / free_tier_limit_bytes) * 100, 1),
+                    'can_upload': remaining_bytes > 0,
+                    'upgrade_required': total_storage_bytes >= free_tier_limit_bytes
+                })
+            else:
+                # Paid plan usage
+                current_usage = user_plan.storage_used_bytes
+                plan_limit = user_plan.plan.storage_size_bytes
+                remaining_bytes = max(0, plan_limit - current_usage)
+                
+                return Response({
+                    'plan_type': 'paid_plan',
+                    'plan_name': user_plan.plan.name,
+                    'current_usage_bytes': current_usage,
+                    'current_usage_gb': round(current_usage / (1024**3), 2),
+                    'limit_bytes': plan_limit,
+                    'limit_gb': round(plan_limit / (1024**3), 0),
+                    'remaining_bytes': remaining_bytes,
+                    'remaining_gb': round(remaining_bytes / (1024**3), 2),
+                    'usage_percentage': round((current_usage / plan_limit) * 100, 1),
+                    'can_upload': remaining_bytes > 0,
+                    'upgrade_required': current_usage >= plan_limit
+                })
+                
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 

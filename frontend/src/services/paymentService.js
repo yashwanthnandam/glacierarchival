@@ -28,7 +28,7 @@ class PaymentService {
         description: 'Hibernation Plan Subscription',
         image: '/logo.png', // Add your logo
         theme: {
-          color: '#10b981'
+          color: '#6b7280' // Updated to neutral color
         },
         // Production-specific settings
         ...(isProduction && {
@@ -52,14 +52,24 @@ class PaymentService {
       return response.data;
     } catch (error) {
       console.error('Error creating payment order:', error);
-      throw new Error(error.response?.data?.error || 'Failed to create payment order');
+      
+      // Enhanced error handling
+      if (error.response?.status === 500) {
+        throw new Error('Payment system is temporarily unavailable. Please contact support at support@datahibernate.in');
+      } else if (error.response?.status === 400) {
+        throw new Error('Invalid payment request. Please refresh the page and try again.');
+      } else if (!error.response) {
+        throw new Error('Network error. Please check your internet connection and try again.');
+      }
+      
+      throw new Error(error.response?.data?.error || 'Payment system is currently unavailable. Please contact support.');
     }
   }
 
   async processPayment(paymentData) {
     return new Promise((resolve, reject) => {
       if (!this.razorpay) {
-        reject(new Error('Razorpay not initialized'));
+        reject(new Error('Payment system is not initialized. Please refresh the page and try again.'));
         return;
       }
 
@@ -94,12 +104,12 @@ class PaymentService {
             });
           } catch (error) {
             console.error('Payment verification failed:', error);
-            reject(new Error(error.response?.data?.error || 'Payment verification failed'));
+            reject(new Error('Payment verification failed. Please contact support at support@datahibernate.in for assistance.'));
           }
         },
         modal: {
           ondismiss: () => {
-            reject(new Error('Payment cancelled by user'));
+            reject(new Error('Payment was cancelled. You can try again when ready.'));
           }
         }
       };

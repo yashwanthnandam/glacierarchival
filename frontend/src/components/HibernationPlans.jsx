@@ -80,12 +80,12 @@ const HibernationPlans = ({ onPlanSelect, currentPlan, onClose }) => {
       const isDevelopment = process.env.NODE_ENV === 'development' || window.location.hostname === 'localhost';
       
       if (!keyId) {
-        throw new Error('Razorpay key not found. Please contact support.');
+        throw new Error('Payment system is currently unavailable. Please contact support at support@datahibernate.in');
       }
       
       // Only reject test key in production
       if (!isDevelopment && keyId === 'rzp_test_1234567890') {
-        throw new Error('Razorpay is not properly configured for production. Please contact support.');
+        throw new Error('Payment system is not properly configured. Please contact support at support@datahibernate.in');
       }
       
       // Initialize Razorpay
@@ -106,7 +106,21 @@ const HibernationPlans = ({ onPlanSelect, currentPlan, onClose }) => {
       
     } catch (error) {
       console.error('Payment error:', error);
-      setPaymentError(error.message);
+      
+      // Enhanced error handling for better user experience
+      let userFriendlyMessage = 'Payment is currently unavailable. Please try again later or contact support.';
+      
+      if (error.message.includes('Razorpay')) {
+        userFriendlyMessage = 'Payment system is temporarily unavailable. Please contact support at support@datahibernate.in for assistance.';
+      } else if (error.message.includes('network') || error.message.includes('Network')) {
+        userFriendlyMessage = 'Network error occurred. Please check your internet connection and try again.';
+      } else if (error.message.includes('cancelled')) {
+        userFriendlyMessage = 'Payment was cancelled. You can try again when ready.';
+      } else if (error.message.includes('verification')) {
+        userFriendlyMessage = 'Payment verification failed. Please contact support at support@datahibernate.in.';
+      }
+      
+      setPaymentError(userFriendlyMessage);
     } finally {
       setPaymentLoading(false);
     }
@@ -606,8 +620,38 @@ const HibernationPlans = ({ onPlanSelect, currentPlan, onClose }) => {
 
               {/* Payment Error */}
               {paymentError && (
-                <Alert severity="error" sx={{ mb: 2 }}>
-                  {paymentError}
+                <Alert 
+                  severity="error" 
+                  sx={{ 
+                    mb: 2,
+                    borderRadius: 3,
+                    boxShadow: '0 4px 16px rgba(0,0,0,0.08)',
+                    border: '1px solid rgba(0,0,0,0.05)',
+                  }}
+                  action={
+                    <Button 
+                      color="inherit" 
+                      size="small" 
+                      onClick={() => setPaymentError(null)}
+                      sx={{
+                        fontWeight: 600,
+                        borderRadius: 2,
+                        px: 2,
+                        py: 1,
+                      }}
+                    >
+                      Dismiss
+                    </Button>
+                  }
+                >
+                  <Typography variant="body1" sx={{ fontWeight: 500 }}>
+                    {paymentError}
+                  </Typography>
+                  {paymentError.includes('support@datahibernate.in') && (
+                    <Typography variant="body2" sx={{ mt: 1, opacity: 0.8 }}>
+                      We apologize for the inconvenience. Our team is working to resolve this issue.
+                    </Typography>
+                  )}
                 </Alert>
               )}
 
