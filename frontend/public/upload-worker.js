@@ -56,12 +56,13 @@ self.onmessage = function(e) {
         }
         
         // Get presigned URL
-        const presignedResponse = await fetch('http://localhost:8000/api/uppy/presigned-url/', {
+        const presignedResponse = await fetch('https://datahibernate.in/api/uppy/presigned-url/', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${accessToken}`
           },
+          credentials: 'include', // Include cookies for authentication
           body: JSON.stringify({
             filename: fileData.name,
             fileType: fileData.type,
@@ -131,12 +132,13 @@ self.onmessage = function(e) {
         
         if (uploadResponse.ok) {
           // Mark upload complete
-          const completeResponse = await fetch('http://localhost:8000/api/uppy/upload-complete/', {
+          const completeResponse = await fetch('https://datahibernate.in/api/uppy/upload-complete/', {
             method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${accessToken}`
-          },
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${accessToken}`
+            },
+            credentials: 'include', // Include cookies for authentication
             body: JSON.stringify({
               fileId: fileId,
               s3Key: presignedUrl.fields.key,

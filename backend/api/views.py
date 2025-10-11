@@ -7,6 +7,7 @@ import time
 from django.contrib.auth.models import User
 from django.utils import timezone
 from django.utils.crypto import get_random_string
+from datetime import timedelta
 import boto3
 from botocore.exceptions import ClientError
 import uuid
@@ -22,6 +23,7 @@ from .payment_service import PaymentService
 from .services import MediaFileService, EmailService, S3Service
 from .utils import validate_file_size, calculate_file_checksum, sanitize_filename
 from .error_handling import handle_api_error, validate_required_fields, validate_file_upload, create_success_response, create_error_response
+from .constants import EMAIL_VERIFICATION_EXPIRY_HOURS
 
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
@@ -37,7 +39,7 @@ def register_user(request):
         
         # Send verification email
         try:
-            EmailService.send_verification_email(user, verification.token)
+            EmailService.send_verification_email(user, verification.token, request)
             return Response({
                 'message': 'Registration successful. Please check your email to verify your account.',
                 'user_id': user.id
@@ -46,7 +48,24 @@ def register_user(request):
             return Response({
                 'error': 'Registration successful but failed to send verification email. Please contact support.'
             }, status=status.HTTP_201_CREATED)
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    # Format validation errors for better frontend handling
+    error_messages = []
+    for field, errors in serializer.errors.items():
+        for error in errors:
+            if field == 'email' and 'already exists' in str(error):
+                error_messages.append('A user with this email already exists. Please use a different email.')
+            elif field == 'username' and 'already exists' in str(error):
+                error_messages.append('A user with this username already exists. Please choose a different username.')
+            elif field == 'password':
+                error_messages.append(f'Password error: {str(error)}')
+            else:
+                error_messages.append(f'{field.title()}: {str(error)}')
+    
+    return Response({
+        'error': '; '.join(error_messages) if error_messages else 'Invalid registration data.',
+        'details': serializer.errors
+    }, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
@@ -86,12 +105,16 @@ def resend_verification(request):
         
         verification, created = EmailVerification.objects.get_or_create(user=user)
         if not created:
+            # Generate new token and reset expiry
             verification.token = get_random_string(32)
             verification.verified = False
+            verification.expires_at = timezone.now() + timedelta(hours=EMAIL_VERIFICATION_EXPIRY_HOURS)
             verification.save()
         
-        EmailService.send_verification_email(user, verification.token)
-        return Response({'message': 'Verification email sent'}, status=status.HTTP_200_OK)
+        EmailService.send_verification_email(user, verification.token, request)
+        return Response({
+            'message': 'Verification email sent. The link will be valid for 7 days.'
+        }, status=status.HTTP_200_OK)
     except User.DoesNotExist:
         return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
 

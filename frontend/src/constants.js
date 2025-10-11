@@ -2,6 +2,7 @@
 export const API_CONFIG = {
   baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/',
   timeout: 30000,
+  withCredentials: true, // Send cookies with cross-origin requests
 };
 
 export const UPLOAD_CONFIG = {
@@ -25,7 +26,7 @@ export const ROUTES = {
 export const FILE_UPLOAD = {
   MAX_FILE_SIZE: 5 * 1024 * 1024 * 1024, // 5GB - aligned with backend MAX_FILE_SIZE
   MAX_TOTAL_SIZE: 15 * 1024 * 1024 * 1024, // 15GB - aligned with free tier limit
-  MAX_FILES: 1000,
+  MAX_FILES: 1000000,
   MAX_SESSION_SIZE: 50 * 1024 * 1024 * 1024, // 50GB - maximum session size
   CHUNK_SIZE: 8 * 1024 * 1024, // 8MB chunks for large files
   MEMORY_LIMIT: 100 * 1024 * 1024, // 100MB memory limit for processing
@@ -90,7 +91,7 @@ export const MESSAGES = {
   SESSION_SIZE_EXCEEDED: 'Upload session size exceeds the limit of 50GB',
   STORAGE_LIMIT_EXCEEDED: 'Storage limit exceeded. Please subscribe to a hibernation plan to continue.',
   MEMORY_LIMIT_EXCEEDED: 'File processing exceeds memory limit. Please upload smaller files.',
-  TOO_MANY_FILES: 'Too many files selected. Maximum 1000 files per upload.',
+  TOO_MANY_FILES: 'Too many files selected. Maximum 1,000,000 files per upload.',
   INVALID_FILE_TYPE: 'File type not allowed. Please check allowed file types.',
   UPLOAD_CANCELLED: 'Upload cancelled by user',
   UPLOAD_TIMEOUT: 'Upload timeout. Please try again with smaller files.',

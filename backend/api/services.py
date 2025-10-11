@@ -665,10 +665,41 @@ class EmailService:
     """Service for email operations"""
     
     @staticmethod
-    def send_verification_email(user, token):
+    def send_verification_email(user, token, request=None):
         """Send email verification"""
         subject = 'Verify your Glacier Archival account'
-        verification_url = f"{settings.FRONTEND_URL}/verify-email?token={token}"
+        
+        # Determine the frontend URL dynamically
+        if request:
+            # Check for frontend-specific headers first
+            frontend_host = request.META.get('HTTP_X_FORWARDED_HOST') or request.META.get('HTTP_ORIGIN')
+            
+            if frontend_host:
+                # Extract host from origin (e.g., "http://localhost:5173" -> "localhost:5173")
+                if '://' in frontend_host:
+                    frontend_host = frontend_host.split('://')[1]
+                scheme = 'https' if request.is_secure() else 'http'
+                frontend_url = f"{scheme}://{frontend_host}"
+            else:
+                # Fallback: try to detect frontend port from common patterns
+                host = request.get_host()
+                if ':8000' in host:  # Backend port
+                    frontend_host = host.replace(':8000', ':5173')  # Frontend port
+                    scheme = 'https' if request.is_secure() else 'http'
+                    frontend_url = f"{scheme}://{frontend_host}"
+                else:
+                    # Use the request's origin for dynamic URL
+                    scheme = 'https' if request.is_secure() else 'http'
+                    frontend_url = f"{scheme}://{host}"
+        else:
+            # Fallback to settings or environment
+            frontend_url = settings.FRONTEND_URL
+        
+        verification_url = f"{frontend_url}/verify-email?token={token}"
+        
+        # Get expiry days from settings
+        from .constants import EMAIL_VERIFICATION_EXPIRY_HOURS
+        expiry_days = EMAIL_VERIFICATION_EXPIRY_HOURS / 24
         
         message = f"""
         Hello {user.username},
@@ -678,7 +709,7 @@ class EmailService:
         Please click the link below to verify your email address:
         {verification_url}
         
-        This link will expire in 24 hours.
+        This link will expire in {expiry_days:.0f} days.
         
         If you didn't create this account, please ignore this email.
         
