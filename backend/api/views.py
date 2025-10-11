@@ -297,10 +297,6 @@ class MediaFileViewSet(viewsets.ModelViewSet):
             
         except Exception as e:
             return handle_api_error(e)
-    
-
-
-    
 
     @action(detail=True, methods=['post'], parser_classes=[JSONParser])
     def archive(self, request, pk=None):
@@ -484,14 +480,30 @@ class MediaFileViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def get_storage_costs(self, request):
-        """Get storage cost breakdown in USD for user's files"""
+        """
+        Get storage cost breakdown for user's files.
+        Supports both USD and INR with optional GST calculation.
+        
+        Query Parameters:
+        - currency: 'USD' or 'INR' (default: 'USD')
+        - include_gst: 'true' or 'false' (default: 'false', only applies to INR)
+        """
         try:
+            # Get query parameters
+            currency = request.query_params.get('currency', 'USD').upper()
+            include_gst = request.query_params.get('include_gst', 'false').lower() == 'true'
+            
+            # Validate currency
+            if currency not in ['USD', 'INR']:
+                return Response({'error': 'Currency must be USD or INR'}, status=status.HTTP_400_BAD_REQUEST)
+            
             files = MediaFile.objects.filter(user=request.user, is_deleted=False)
             
             # Handle empty file set
             if not files.exists():
-                return Response({
-                    'total_monthly_cost_usd': 0,
+                base_response = {
+                    'total_monthly_cost': 0,
+                    'currency': currency,
                     'cost_breakdown': {
                         'standard': 0,
                         'ia': 0,
@@ -500,9 +512,18 @@ class MediaFileViewSet(viewsets.ModelViewSet):
                     },
                     'file_count': 0,
                     'total_size_gb': 0
-                })
+                }
+                
+                if currency == 'INR' and include_gst:
+                    base_response.update({
+                        'gst_amount': 0,
+                        'total_with_gst': 0,
+                        'gst_rate': 18.0
+                    })
+                
+                return Response(base_response)
             
-            total_cost_usd = 0
+            total_cost = 0
             cost_breakdown = {
                 'standard': 0,
                 'ia': 0,
@@ -521,88 +542,50 @@ class MediaFileViewSet(viewsets.ModelViewSet):
                 else:
                     tier = 'standard'
                 
-                monthly_cost_usd = s3_service.calculate_storage_cost(file.file_size, tier, 'USD')
-                cost_breakdown[tier] += monthly_cost_usd
-                total_cost_usd += monthly_cost_usd
+                monthly_cost = s3_service.calculate_storage_cost(file.file_size, tier, currency)
+                cost_breakdown[tier] += monthly_cost
+                total_cost += monthly_cost
             
-            return Response({
-                'total_monthly_cost_usd': round(total_cost_usd, 4),
+            # Build response
+            response_data = {
+                'total_monthly_cost': round(total_cost, 4),
+                'currency': currency,
                 'cost_breakdown': cost_breakdown,
                 'file_count': files.count(),
                 'total_size_gb': round(sum(f.file_size for f in files) / (1024**3), 2)
-            })
+            }
+            
+            # Add GST calculation for INR if requested
+            if currency == 'INR' and include_gst:
+                gst_rate = 18.0
+                gst_amount = total_cost * (gst_rate / 100)
+                total_with_gst = total_cost + gst_amount
+                
+                response_data.update({
+                    'gst_amount': round(gst_amount, 4),
+                    'total_with_gst': round(total_with_gst, 4),
+                    'gst_rate': gst_rate
+                })
+            
+            return Response(response_data)
             
         except Exception as e:
             return Response({'error': f'Failed to get storage costs: {str(e)}'}, 
                           status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    @action(detail=False, methods=['get'])
-    def get_storage_costs_inr(self, request):
-        """Get storage cost breakdown in INR with GST for user's files"""
-        try:
-            files = MediaFile.objects.filter(user=request.user, is_deleted=False)
-            
-            # Handle empty file set
-            if not files.exists():
-                return Response({
-                    'total_monthly_cost_inr': 0,
-                    'gst_amount': 0,
-                    'total_with_gst': 0,
-                    'gst_rate': 18.0,
-                    'cost_breakdown_inr': {
-                        'standard': 0,
-                        'ia': 0,
-                        'glacier': 0,
-                        'deep_archive': 0
-                    },
-                    'file_count': 0,
-                    'total_size_gb': 0
-                })
-            
-            total_cost_inr = 0
-            cost_breakdown = {
-                'standard': 0,
-                'ia': 0,
-                'glacier': 0,
-                'deep_archive': 0
-            }
-            
-            s3_service = S3Service(request.user)
-            
-            for file in files:
-                if file.status == 'uploaded':
-                    tier = 'standard'
-                elif file.status == 'archived':
-                    tier = 'deep_archive'
-                else:
-                    tier = 'standard'
-                
-                monthly_cost_inr = s3_service.calculate_storage_cost(file.file_size, tier, 'INR')
-                cost_breakdown[tier] += monthly_cost_inr
-                total_cost_inr += monthly_cost_inr
-            
-            # Calculate GST (18%)
-            gst_rate = 18.0
-            gst_amount = total_cost_inr * (gst_rate / 100)
-            total_with_gst = total_cost_inr + gst_amount
-            
-            return Response({
-                'total_monthly_cost_inr': round(total_cost_inr, 4),
-                'gst_amount': round(gst_amount, 4),
-                'total_with_gst': round(total_with_gst, 4),
-                'gst_rate': gst_rate,
-                'cost_breakdown_inr': cost_breakdown,
-                'file_count': files.count(),
-                'total_size_gb': round(sum(f.file_size for f in files) / (1024**3), 2)
-            })
-            
-        except Exception as e:
-            return Response({'error': f'Failed to get storage costs in INR: {str(e)}'}, 
-                          status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
     @action(detail=False, methods=['post'], parser_classes=[JSONParser])
     def auto_hibernate_files(self, request):
-        """Automatically hibernate files based on usage patterns"""
+        """
+        Automatically hibernate files based on usage patterns.
+        
+        This feature identifies files that haven't been accessed for a specified period
+        and moves them to cheaper storage tiers to save costs.
+        
+        Parameters:
+        - days_threshold: Number of days since last access (default: 30)
+        - min_size: Minimum file size in bytes to consider (default: 10MB)
+        - dry_run: If true, only returns candidates without hibernating (default: false)
+        """
         try:
             days_threshold = request.data.get('days_threshold', 30)
             min_size = request.data.get('min_size', 10485760)  # 10MB
@@ -672,7 +655,7 @@ class MediaFileViewSet(viewsets.ModelViewSet):
             
             return Response({
                 'candidates_found': candidates.count(),
-                'files_hibernated': len(hibernated_files),
+                'files_hibernated': len(hibernated_files) if not dry_run else 0,
                 'total_monthly_savings_inr': round(total_savings, 4),
                 'hibernated_files': hibernated_files,
                 'dry_run': dry_run
@@ -751,7 +734,16 @@ class MediaFileViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'], parser_classes=[JSONParser])
     def delete_all(self, request):
-        """Delete all files for the current user with safety measures"""
+        """
+        Delete all files for the current user with comprehensive safety measures.
+        
+        Safety features:
+        - Requires explicit confirmation (confirm_delete_all=true)
+        - Prevents deletion if any files were uploaded in the last 24 hours
+        - Soft delete (marks as deleted rather than removing from database)
+        
+        This is a destructive operation - use with caution!
+        """
         try:
             # Get user's files count
             user_files = MediaFile.objects.filter(user=request.user, is_deleted=False)
@@ -1433,71 +1425,3 @@ class UserHibernationPlanViewSet(viewsets.ModelViewSet):
             
             return Response({'message': 'Subscription cancelled successfully'})
             
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-    @action(detail=False, methods=['get'])
-    def usage_stats(self, request):
-        """Get user's plan usage statistics or free tier usage"""
-        try:
-            user_plan = UserHibernationPlan.objects.filter(
-                user=request.user, 
-                is_active=True
-            ).first()
-            
-            if not user_plan:
-                # Return free tier usage stats
-                total_storage_bytes = MediaFile.objects.filter(
-                    user=request.user, 
-                    is_deleted=False
-                ).aggregate(total=Sum('file_size'))['total'] or 0
-                
-                free_tier_limit_bytes = 15 * 1024 * 1024 * 1024  # 15GB
-                free_tier_used_gb = total_storage_bytes / (1024**3)
-                free_tier_limit_gb = free_tier_limit_bytes / (1024**3)
-                free_tier_used_percentage = (total_storage_bytes / free_tier_limit_bytes) * 100
-                
-                return Response({
-                    'is_free_tier': True,
-                    'storage_used_bytes': total_storage_bytes,
-                    'storage_used_gb': round(free_tier_used_gb, 2),
-                    'storage_limit_bytes': free_tier_limit_bytes,
-                    'storage_limit_gb': free_tier_limit_gb,
-                    'storage_used_percentage': round(free_tier_used_percentage, 1),
-                    'retrieval_used_gb': 0,
-                    'retrieval_remaining_gb': 0,
-                    'retrieval_limit_gb': 0,
-                    'plan_expires_at': None,
-                    'is_expired': False
-                })
-            
-            # Calculate total storage used by user's files
-            total_storage_bytes = MediaFile.objects.filter(
-                user=request.user, 
-                is_deleted=False
-            ).aggregate(total=Sum('file_size'))['total'] or 0
-            
-            # Update user plan storage usage
-            user_plan.storage_used_bytes = total_storage_bytes
-            user_plan.save()
-            
-            stats = {
-                'plan': HibernationPlanSerializer(user_plan.plan).data,
-                'storage_used_bytes': total_storage_bytes,
-                'storage_used_gb': round(total_storage_bytes / (1024**3), 2),
-                'storage_limit_bytes': user_plan.plan.storage_size_bytes,
-                'storage_limit_gb': round(user_plan.plan.storage_size_bytes / (1024**3), 2),
-                'storage_used_percentage': user_plan.storage_used_percentage,
-                'retrieval_used_gb': float(user_plan.retrieval_used_gb),
-                'retrieval_remaining_gb': float(user_plan.retrieval_remaining_gb),
-                'retrieval_limit_gb': user_plan.plan.free_retrieval_gb,
-                'plan_expires_at': user_plan.expires_at,
-                'is_expired': user_plan.is_expired()
-            }
-            
-            return Response(stats)
-            
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
