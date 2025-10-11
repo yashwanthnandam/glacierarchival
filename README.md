@@ -50,7 +50,7 @@ A comprehensive cloud storage platform with intelligent hibernation capabilities
    python -m venv venv
    source venv/bin/activate  # On Windows: venv\Scripts\activate
    pip install -r requirements.txt
-   cp env.example .env
+   cp .env.example .env
    # Edit .env with your configuration
    python manage.py migrate
    python manage.py createsuperuser
@@ -127,6 +127,11 @@ glacierarchival/
 │   │   ├── utils/          # Utility functions
 │   │   └── constants.js    # App constants
 │   └── package.json        # Node dependencies
+├── docs/                   # Documentation
+│   ├── SETUP.md           # Setup guide
+│   ├── CONTRIBUTING.md    # Contribution guidelines
+│   ├── E2E_ENCRYPTION.md  # Encryption details
+│   └── ...                # More docs
 ├── docker-compose.yml      # Docker configuration
 └── README.md               # This file
 ```
@@ -210,7 +215,7 @@ docker-compose up -d
 6. Configure backup strategies
 
 ### Environment Variables
-See `ENVIRONMENT_SETUP.md` for detailed configuration guide.
+See [docs/ENVIRONMENT_SETUP.md](docs/ENVIRONMENT_SETUP.md) for detailed configuration guide.
 
 ## 📈 Monitoring
 
@@ -241,6 +246,8 @@ See `ENVIRONMENT_SETUP.md` for detailed configuration guide.
 - Update documentation
 - Follow semantic versioning
 
+See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for detailed contribution guidelines.
+
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
@@ -248,10 +255,14 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 🆘 Support
 
 ### Documentation
-- [Setup Guide](SETUP.md)
-- [Environment Setup](ENVIRONMENT_SETUP.md)
-- [Production Checklist](PRODUCTION_CHECKLIST.md)
-- [Razorpay Setup](RAZORPAY_SETUP.md)
+- [Setup Guide](docs/SETUP.md)
+- [Environment Setup](docs/ENVIRONMENT_SETUP.md)
+- [Production Checklist](docs/PRODUCTION_CHECKLIST.md)
+- [Codebase Analysis](docs/CODEBASE_ANALYSIS.md)
+- [E2E Encryption](docs/E2E_ENCRYPTION.md)
+- [Razorpay Setup](docs/RAZORPAY_SETUP.md)
+- [Production Razorpay Setup](docs/PRODUCTION_RAZORPAY_SETUP.md)
+- [Razorpay Troubleshooting](docs/RAZORPAY_TROUBLESHOOTING.md)
 
 ### Troubleshooting
 - Check logs for error details
