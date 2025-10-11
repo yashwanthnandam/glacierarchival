@@ -184,7 +184,7 @@ class EmailVerification(models.Model):
     token = models.CharField(max_length=100, unique=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     verified = models.BooleanField(default=False, db_index=True)
-    expires_at = models.DateTimeField(help_text='Token expiration time', default=timezone.now)
+    expires_at = models.DateTimeField(help_text='Token expiration time')
 
     class Meta:
         verbose_name = "Email Verification"
@@ -232,6 +232,17 @@ class HibernationPlan(models.Model):
         verbose_name = "Hibernation Plan"
         verbose_name_plural = "Hibernation Plans"
         unique_together = ['name', 'storage_tier']
+
+    @property
+    def storage_size_bytes(self):
+        """Convert storage_limit_gb to bytes"""
+        return self.storage_limit_gb * (1024 ** 3)
+    
+    @property
+    def monthly_cost_usd(self):
+        """Convert monthly price from INR to USD (approximate)"""
+        # Approximate conversion rate: 1 USD = 83 INR
+        return float(self.monthly_price_inr) / 83.0
 
     def __str__(self):
         return f"{self.name} - {self.storage_tier}"

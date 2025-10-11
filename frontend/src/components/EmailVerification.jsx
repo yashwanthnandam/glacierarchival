@@ -40,8 +40,15 @@ const EmailVerification = () => {
       setStatus('success');
       setMessage(response.data.message);
     } catch (error) {
-      setStatus('error');
-      setMessage(error.response?.data?.error || 'Verification failed');
+      const errorMessage = error.response?.data?.error || 'Verification failed';
+      
+      if (errorMessage.includes('expired')) {
+        setStatus('expired');
+        setMessage('Your verification link has expired. Please request a new verification email.');
+      } else {
+        setStatus('error');
+        setMessage(errorMessage);
+      }
     }
   };
 
@@ -67,6 +74,7 @@ const EmailVerification = () => {
       case 'success':
         return <CheckCircle color="success" sx={{ fontSize: 60 }} />;
       case 'error':
+      case 'expired':
         return <Email color="error" sx={{ fontSize: 60 }} />;
       default:
         return <CircularProgress size={60} />;
@@ -78,6 +86,7 @@ const EmailVerification = () => {
       case 'success':
         return 'success';
       case 'error':
+      case 'expired':
         return 'error';
       default:
         return 'info';
@@ -113,10 +122,13 @@ const EmailVerification = () => {
           </Box>
         )}
 
-        {status === 'error' && (
+        {(status === 'error' || status === 'expired') && (
           <Box>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Didn't receive the email? Enter your email address to resend the verification email.
+              {status === 'expired' 
+                ? 'Your verification link has expired. Enter your email address to get a new verification email.'
+                : 'Didn\'t receive the email? Enter your email address to resend the verification email.'
+              }
             </Typography>
             
             <TextField

@@ -185,12 +185,12 @@ const HibernationPlanDashboard = () => {
         
         {/* Free Tier Usage */}
         {usageStats?.is_free_tier && (
-          <Paper elevation={3} sx={{ p: 4, mb: 4, borderRadius: 2, border: '2px solid #10b981', bgcolor: 'rgba(16, 185, 129, 0.05)' }}>
+          <Paper elevation={3} sx={{ p: 4, mb: 4, borderRadius: 2, border: '2px solid #6b7280', bgcolor: 'rgba(107, 114, 128, 0.05)' }}>
             <Stack direction="row" alignItems="center" justifyContent="space-between" mb={3}>
               <Stack direction="row" alignItems="center" spacing={2}>
-                <Storage sx={{ fontSize: 40, color: '#10b981' }} />
+                <Storage sx={{ fontSize: 40, color: '#6b7280' }} />
                 <Box>
-                  <Typography variant="h5" sx={{ fontWeight: 700, color: '#10b981' }}>
+                  <Typography variant="h5" sx={{ fontWeight: 700, color: '#6b7280' }}>
                     Free Tier - 15GB
                   </Typography>
                   <Typography variant="body1" color="text.secondary">
@@ -200,7 +200,7 @@ const HibernationPlanDashboard = () => {
               </Stack>
               <Chip
                 label="Free Tier"
-                color="success"
+                color="primary"
                 icon={<CheckCircle />}
                 sx={{ fontSize: '1rem', height: 32, px: 1 }}
               />
@@ -226,9 +226,9 @@ const HibernationPlanDashboard = () => {
                       sx={{ 
                         height: 8, 
                         borderRadius: 4,
-                        bgcolor: 'rgba(16, 185, 129, 0.1)',
+                        bgcolor: 'rgba(107, 114, 128, 0.1)',
                         '& .MuiLinearProgress-bar': {
-                          bgcolor: '#10b981'
+                          bgcolor: '#6b7280'
                         }
                       }} 
                     />
@@ -264,8 +264,8 @@ const HibernationPlanDashboard = () => {
                   fontWeight: 600, 
                   px: 4, 
                   py: 1.5,
-                  bgcolor: '#10b981',
-                  '&:hover': { bgcolor: '#059669' }
+                  bgcolor: '#6b7280',
+                  '&:hover': { bgcolor: '#4b5563' }
                 }}
               >
                 Upgrade to Hibernation Plan
@@ -328,12 +328,12 @@ const HibernationPlanDashboard = () => {
         
         {/* Free Tier Usage */}
         {usageStats?.is_free_tier && (
-          <Paper elevation={3} sx={{ p: 4, mb: 4, borderRadius: 2, border: '2px solid #10b981', bgcolor: 'rgba(16, 185, 129, 0.05)' }}>
+          <Paper elevation={3} sx={{ p: 4, mb: 4, borderRadius: 2, border: '2px solid #6b7280', bgcolor: 'rgba(107, 114, 128, 0.05)' }}>
             <Stack direction="row" alignItems="center" justifyContent="space-between" mb={3}>
               <Stack direction="row" alignItems="center" spacing={2}>
-                <Storage sx={{ fontSize: 40, color: '#10b981' }} />
+                <Storage sx={{ fontSize: 40, color: '#6b7280' }} />
                 <Box>
-                  <Typography variant="h5" sx={{ fontWeight: 700, color: '#10b981' }}>
+                  <Typography variant="h5" sx={{ fontWeight: 700, color: '#6b7280' }}>
                     Free Tier - 15GB
                   </Typography>
                   <Typography variant="body1" color="text.secondary">
@@ -343,7 +343,7 @@ const HibernationPlanDashboard = () => {
               </Stack>
               <Chip
                 label="Free Tier"
-                color="success"
+                color="primary"
                 icon={<CheckCircle />}
                 sx={{ fontSize: '1rem', height: 32, px: 1 }}
               />
@@ -369,9 +369,9 @@ const HibernationPlanDashboard = () => {
                       sx={{ 
                         height: 8, 
                         borderRadius: 4,
-                        bgcolor: 'rgba(16, 185, 129, 0.1)',
+                        bgcolor: 'rgba(107, 114, 128, 0.1)',
                         '& .MuiLinearProgress-bar': {
-                          bgcolor: '#10b981'
+                          bgcolor: '#6b7280'
                         }
                       }} 
                     />
@@ -407,8 +407,8 @@ const HibernationPlanDashboard = () => {
                   fontWeight: 600, 
                   px: 4, 
                   py: 1.5,
-                  bgcolor: '#10b981',
-                  '&:hover': { bgcolor: '#059669' }
+                  bgcolor: '#6b7280',
+                  '&:hover': { bgcolor: '#4b5563' }
                 }}
               >
                 Upgrade to Hibernation Plan

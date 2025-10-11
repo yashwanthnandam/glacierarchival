@@ -28,7 +28,8 @@ ARCHIVE_JOB_TYPE_CHOICES = [
 ]
 
 # Email verification
-EMAIL_VERIFICATION_EXPIRY_HOURS = 24
+import os
+EMAIL_VERIFICATION_EXPIRY_HOURS = int(os.getenv('EMAIL_VERIFICATION_EXPIRY_HOURS', '168'))  # Default 7 days
 
 # Download URL expiry
 DOWNLOAD_URL_EXPIRY_SECONDS = 3600  # 1 hour

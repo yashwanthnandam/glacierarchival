@@ -112,8 +112,8 @@ const UploadProgressBar = memo(({ uploadManagerState }) => {
   if (active === 0 && queued === 0 && completed > 0) {
     status = 'completed';
     // Use green for success, orange only for failures to reduce flickering
-    statusColor = failed > 0 ? '#f59e0b' : '#10b981';
-    progressColor = failed > 0 ? '#f59e0b' : '#10b981';
+    statusColor = failed > 0 ? '#f59e0b' : '#6b7280';
+    progressColor = failed > 0 ? '#f59e0b' : '#6b7280';
     
     if (cancelled > 0) {
       statusText = `⏹️ Upload cancelled! ${completed} files uploaded, ${cancelled} cancelled`;
@@ -1826,10 +1826,10 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
 
           {bulkOperationStatus === 'completed' && (
             <Box sx={{ mb: 4 }}>
-              <Paper sx={{ p: 2.5, bgcolor: alpha('#d1fae5', 0.3), border: '1px solid', borderColor: '#10b981' }}>
+              <Paper sx={{ p: 2.5, bgcolor: alpha('#f3f4f6', 0.3), border: '1px solid', borderColor: '#6b7280' }}>
                 <Stack direction="row" alignItems="center" spacing={2}>
-                  <CheckCircle sx={{ color: '#10b981' }} />
-                  <Typography variant="h6" sx={{ fontWeight: 600, color: '#065f46' }}>
+                  <CheckCircle sx={{ color: '#6b7280' }} />
+                  <Typography variant="h6" sx={{ fontWeight: 600, color: '#374151' }}>
                     Deletion Completed Successfully!
                   </Typography>
                 </Stack>

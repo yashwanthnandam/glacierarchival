@@ -234,7 +234,7 @@ def secure_register(request):
             
             # Send verification email
             try:
-                EmailService.send_verification_email(user, verification.token)
+                EmailService.send_verification_email(user, verification.token, request)
                 return Response({
                     'message': 'Registration successful. Please check your email to verify your account.',
                     'user_id': user.id
@@ -243,8 +243,24 @@ def secure_register(request):
                 return Response({
                     'error': 'Registration successful but failed to send verification email. Please contact support.'
                 }, status=status.HTTP_201_CREATED)
-                
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Format validation errors for better frontend handling
+        error_messages = []
+        for field, errors in serializer.errors.items():
+            for error in errors:
+                if field == 'email' and 'already exists' in str(error):
+                    error_messages.append('A user with this email already exists. Please use a different email.')
+                elif field == 'username' and 'already exists' in str(error):
+                    error_messages.append('A user with this username already exists. Please choose a different username.')
+                elif field == 'password':
+                    error_messages.append(f'Password error: {str(error)}')
+                else:
+                    error_messages.append(f'{field.title()}: {str(error)}')
+        
+        return Response({
+            'error': '; '.join(error_messages) if error_messages else 'Invalid registration data.',
+            'details': serializer.errors
+        }, status=status.HTTP_400_BAD_REQUEST)
         
     except Exception as e:
         return Response({

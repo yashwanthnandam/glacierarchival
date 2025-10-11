@@ -72,12 +72,12 @@ const SimplifiedOverview = () => {
 
     const plan = currentPlan.plan;
     const tierMap = {
-      '100gb': { storage: '100 GB', color: 'success' },
+      '100gb': { storage: '100 GB', color: 'primary' },
       '500gb': { storage: '500 GB', color: 'warning' },
       '1tb': { storage: '1 TB', color: 'error' }
     };
 
-    const tierInfo = tierMap[plan.storage_tier] || { storage: 'Unknown', color: 'default' };
+    const tierInfo = tierMap[plan.storage_tier] || { storage: 'Unknown', color: 'primary' };
 
     return {
       name: plan.name.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase()),
@@ -103,7 +103,7 @@ const SimplifiedOverview = () => {
     const percentage = getUsagePercentage();
     if (percentage >= 90) return 'error';
     if (percentage >= 75) return 'warning';
-    return 'success';
+    return 'primary';
   };
 
   if (loading) {
@@ -131,12 +131,25 @@ const SimplifiedOverview = () => {
   const usageColor = getUsageColor();
 
   return (
-    <Box sx={{ maxWidth: 1200, mx: 'auto', p: 3 }}>
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-        <Typography variant="h4" fontWeight="bold">
+    <Box sx={{ maxWidth: 1200, mx: 'auto', p: 4 }}>
+      <Box display="flex" justifyContent="space-between" alignItems="center" mb={4}>
+        <Typography variant="h4" sx={{ fontWeight: 800, color: 'text.primary' }}>
           Storage Overview
         </Typography>
-        <IconButton onClick={loadOverviewData} color="primary">
+        <IconButton 
+          onClick={loadOverviewData} 
+          sx={{
+            p: 1.5,
+            borderRadius: 2,
+            bgcolor: 'grey.100',
+            color: 'text.secondary',
+            '&:hover': {
+              bgcolor: 'grey.200',
+              transform: 'scale(1.05)',
+            },
+            transition: 'all 0.3s ease',
+          }}
+        >
           <Refresh />
         </IconButton>
       </Box>
@@ -144,11 +157,29 @@ const SimplifiedOverview = () => {
       <Grid container spacing={3}>
         {/* Current Plan Card */}
         <Grid item xs={12} md={4}>
-          <Card sx={{ height: '100%' }}>
-            <CardContent>
-              <Box display="flex" alignItems="center" mb={2}>
-                {planInfo.icon}
-                <Typography variant="h6" ml={1}>
+          <Card sx={{ 
+            height: '100%', 
+            borderRadius: 3,
+            boxShadow: '0 4px 16px rgba(0,0,0,0.08)',
+            border: '1px solid rgba(0,0,0,0.05)',
+            transition: 'all 0.3s ease',
+            '&:hover': {
+              boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+              transform: 'translateY(-2px)',
+            }
+          }}>
+            <CardContent sx={{ p: 3 }}>
+              <Box display="flex" alignItems="center" mb={3}>
+                <Box sx={{ 
+                  p: 1.5, 
+                  borderRadius: 2, 
+                  bgcolor: 'grey.100',
+                  color: 'text.secondary',
+                  mr: 2
+                }}>
+                  {planInfo.icon}
+                </Box>
+                <Typography variant="h6" sx={{ fontWeight: 700, color: 'text.primary' }}>
                   Current Plan
                 </Typography>
               </Box>
@@ -157,20 +188,41 @@ const SimplifiedOverview = () => {
                 label={planInfo.name} 
                 color={planInfo.color} 
                 size="large" 
-                sx={{ mb: 2 }}
+                sx={{ 
+                  mb: 3,
+                  fontWeight: 600,
+                  fontSize: '0.9rem',
+                  height: 32
+                }}
               />
               
-              <Typography variant="h4" color="primary" mb={1}>
+              <Typography variant="h3" sx={{ 
+                fontWeight: 800, 
+                color: 'text.primary', 
+                mb: 2
+              }}>
                 {planInfo.storage}
               </Typography>
               
-              <Typography variant="body2" color="text.secondary" mb={2}>
+              <Typography variant="body1" sx={{ 
+                color: 'text.secondary', 
+                mb: 3,
+                lineHeight: 1.6
+              }}>
                 {planInfo.description}
               </Typography>
 
               {currentPlan && (
-                <Box>
-                  <Typography variant="caption" color="text.secondary">
+                <Box sx={{ 
+                  p: 2, 
+                  bgcolor: 'grey.50', 
+                  borderRadius: 2,
+                  border: '1px solid rgba(0,0,0,0.05)'
+                }}>
+                  <Typography variant="caption" sx={{ 
+                    color: 'text.secondary',
+                    fontWeight: 500
+                  }}>
                     Expires: {formatDate(currentPlan.expires_at)}
                   </Typography>
                 </Box>
@@ -181,33 +233,76 @@ const SimplifiedOverview = () => {
 
         {/* Storage Usage Card */}
         <Grid item xs={12} md={4}>
-          <Card sx={{ height: '100%' }}>
-            <CardContent>
-              <Box display="flex" alignItems="center" mb={2}>
-                <CloudUpload />
-                <Typography variant="h6" ml={1}>
+          <Card sx={{ 
+            height: '100%', 
+            borderRadius: 3,
+            boxShadow: '0 4px 16px rgba(0,0,0,0.08)',
+            border: '1px solid rgba(0,0,0,0.05)',
+            transition: 'all 0.3s ease',
+            '&:hover': {
+              boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+              transform: 'translateY(-2px)',
+            }
+          }}>
+            <CardContent sx={{ p: 3 }}>
+              <Box display="flex" alignItems="center" mb={3}>
+                <Box sx={{ 
+                  p: 1.5, 
+                  borderRadius: 2, 
+                  bgcolor: 'grey.100',
+                  color: 'text.secondary',
+                  mr: 2
+                }}>
+                  <CloudUpload />
+                </Box>
+                <Typography variant="h6" sx={{ fontWeight: 700, color: 'text.primary' }}>
                   Storage Usage
                 </Typography>
               </Box>
               
-              <Typography variant="h4" color="primary" mb={1}>
+              <Typography variant="h3" sx={{ 
+                fontWeight: 800, 
+                color: 'text.primary', 
+                mb: 2
+              }}>
                 {formatFileSizeInGB(usageStats?.total_storage_bytes || 0)}
               </Typography>
               
-              <LinearProgress 
-                variant="determinate" 
-                value={usagePercentage} 
-                color={usageColor}
-                sx={{ height: 8, borderRadius: 4, mb: 1 }}
-              />
-              
-              <Typography variant="body2" color="text.secondary">
-                {usagePercentage.toFixed(1)}% of {planInfo.storage} used
-              </Typography>
+              <Box sx={{ mb: 3 }}>
+                <LinearProgress 
+                  variant="determinate" 
+                  value={usagePercentage} 
+                  color={usageColor}
+                  sx={{ 
+                    height: 10, 
+                    borderRadius: 5, 
+                    mb: 2,
+                    bgcolor: 'grey.200',
+                    '& .MuiLinearProgress-bar': {
+                      borderRadius: 5,
+                    }
+                  }}
+                />
+                
+                <Typography variant="body1" sx={{ 
+                  color: 'text.secondary',
+                  fontWeight: 500
+                }}>
+                  {usagePercentage.toFixed(1)}% of {planInfo.storage} used
+                </Typography>
+              </Box>
 
               {usageStats && (
-                <Box mt={2}>
-                  <Typography variant="caption" color="text.secondary">
+                <Box sx={{ 
+                  p: 2, 
+                  bgcolor: 'grey.50', 
+                  borderRadius: 2,
+                  border: '1px solid rgba(0,0,0,0.05)'
+                }}>
+                  <Typography variant="caption" sx={{ 
+                    color: 'text.secondary',
+                    fontWeight: 500
+                  }}>
                     {usageStats.file_count} files stored
                   </Typography>
                 </Box>
@@ -216,55 +311,153 @@ const SimplifiedOverview = () => {
           </Card>
         </Grid>
 
+        {/* Status Card */}
+        <Grid item xs={12} md={4}>
+          <Card sx={{ 
+            height: '100%', 
+            borderRadius: 3,
+            boxShadow: '0 4px 16px rgba(0,0,0,0.08)',
+            border: '1px solid rgba(0,0,0,0.05)',
+            transition: 'all 0.3s ease',
+            '&:hover': {
+              boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+              transform: 'translateY(-2px)',
+            }
+          }}>
+            <CardContent sx={{ p: 3 }}>
+              <Box display="flex" alignItems="center" mb={3}>
+                <Box sx={{ 
+                  p: 1.5, 
+                  borderRadius: 2, 
+                  bgcolor: 'grey.100',
+                  color: 'text.secondary',
+                  mr: 2
+                }}>
+                  <Security />
+                </Box>
+                <Typography variant="h6" sx={{ fontWeight: 700, color: 'text.primary' }}>
+                  Account Status
+                </Typography>
+              </Box>
+              
+              <Box sx={{ mb: 3 }}>
+                <Box display="flex" alignItems="center" mb={2}>
+                  <CheckCircle sx={{ color: 'text.secondary', mr: 1 }} />
+                  <Typography variant="body1" sx={{ fontWeight: 600, color: 'text.primary' }}>
+                    Storage Active
+                  </Typography>
+                </Box>
+                
+                <Box display="flex" alignItems="center" mb={2}>
+                  <CheckCircle sx={{ color: 'text.secondary', mr: 1 }} />
+                  <Typography variant="body1" sx={{ fontWeight: 600, color: 'text.primary' }}>
+                    Encryption Enabled
+                  </Typography>
+                </Box>
+                
+                <Box display="flex" alignItems="center">
+                  <CheckCircle sx={{ color: 'text.secondary', mr: 1 }} />
+                  <Typography variant="body1" sx={{ fontWeight: 600, color: 'text.primary' }}>
+                    Backup Secure
+                  </Typography>
+                </Box>
+              </Box>
+
+              <Box sx={{ 
+                p: 2, 
+                bgcolor: 'grey.50', 
+                borderRadius: 2,
+                border: '1px solid rgba(0,0,0,0.05)'
+              }}>
+                <Typography variant="caption" sx={{ 
+                  color: 'text.secondary',
+                  fontWeight: 600
+                }}>
+                  ✓ All systems operational
+                </Typography>
+              </Box>
+            </CardContent>
+          </Card>
+        </Grid>
+
         {/* Quick Actions */}
         <Grid item xs={12}>
-          <Paper sx={{ p: 3 }}>
-            <Typography variant="h6" mb={2}>
+          <Paper sx={{ p: 4, borderRadius: 3, boxShadow: '0 4px 16px rgba(0,0,0,0.08)' }}>
+            <Typography variant="h5" sx={{ fontWeight: 700, mb: 3, color: 'text.primary' }}>
               Quick Actions
             </Typography>
             
-            <Grid container spacing={2}>
-              <Grid item xs={12} sm={6} md={3}>
+            <Grid container spacing={3}>
+              <Grid item xs={12} sm={6} md={4}>
                 <Button
-                  variant="outlined"
+                  variant="contained"
                   fullWidth
                   startIcon={<CloudUpload />}
-                  onClick={() => window.location.href = '/hibernate'}
+                  onClick={() => window.location.href = '/upload'}
+                  sx={{
+                    py: 2,
+                    borderRadius: 2,
+                    fontSize: '1rem',
+                    fontWeight: 600,
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                    '&:hover': {
+                      boxShadow: '0 6px 16px rgba(0,0,0,0.2)',
+                      transform: 'translateY(-2px)',
+                    },
+                    transition: 'all 0.3s ease',
+                  }}
                 >
                   Upload Files
                 </Button>
               </Grid>
               
-              <Grid item xs={12} sm={6} md={3}>
+              <Grid item xs={12} sm={6} md={4}>
                 <Button
                   variant="outlined"
                   fullWidth
                   startIcon={<AcUnit />}
-                  onClick={() => window.location.href = '/hibernate'}
+                  onClick={() => {
+                    // Navigate to dashboard with hibernate tab selected
+                    window.location.href = '/dashboard';
+                    // Note: This will show the Data Manager tab in the dashboard
+                  }}
+                  sx={{
+                    py: 2,
+                    borderRadius: 2,
+                    fontSize: '1rem',
+                    fontWeight: 600,
+                    borderWidth: 2,
+                    '&:hover': {
+                      borderWidth: 2,
+                      transform: 'translateY(-2px)',
+                    },
+                    transition: 'all 0.3s ease',
+                  }}
                 >
                   Manage Files
                 </Button>
               </Grid>
               
-              <Grid item xs={12} sm={6} md={3}>
+              <Grid item xs={12} sm={6} md={4}>
                 <Button
                   variant="outlined"
                   fullWidth
                   startIcon={<Storage />}
                   onClick={() => window.location.href = '/plans'}
+                  sx={{
+                    py: 2,
+                    borderRadius: 2,
+                    fontSize: '1rem',
+                    fontWeight: 600,
+                    borderWidth: 2,
+                    '&:hover': {
+                      borderWidth: 2,
+                      transform: 'translateY(-2px)',
+                    },
+                    transition: 'all 0.3s ease',
+                  }}
                 >
                   View Plans
-                </Button>
-              </Grid>
-              
-              <Grid item xs={12} sm={6} md={3}>
-                <Button
-                  variant="outlined"
-                  fullWidth
-                  startIcon={<Storage />}
-                  onClick={() => window.location.href = '/analytics'}
-                >
-                  View Analytics
                 </Button>
               </Grid>
             </Grid>
@@ -276,13 +469,28 @@ const SimplifiedOverview = () => {
           <Grid item xs={12}>
             <Alert 
               severity="warning" 
+              sx={{
+                borderRadius: 3,
+                boxShadow: '0 4px 16px rgba(0,0,0,0.08)',
+                border: '1px solid rgba(0,0,0,0.05)',
+              }}
               action={
-                <Button color="inherit" size="small" onClick={() => window.location.href = '/plans'}>
+                <Button 
+                  color="inherit" 
+                  size="small" 
+                  onClick={() => window.location.href = '/plans'}
+                  sx={{
+                    fontWeight: 600,
+                    borderRadius: 2,
+                    px: 2,
+                    py: 1,
+                  }}
+                >
                   View Plans
                 </Button>
               }
             >
-              <Typography variant="body2">
+              <Typography variant="body1" sx={{ fontWeight: 500 }}>
                 You're using {usagePercentage.toFixed(1)}% of your free storage. 
                 Consider upgrading to a hibernation plan for more space and features.
               </Typography>
