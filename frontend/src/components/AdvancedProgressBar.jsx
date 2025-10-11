@@ -236,7 +236,7 @@ const AdvancedProgressBar = ({
               <Storage color="primary" />
               <Box>
                 <Typography variant="body2" color="text.secondary">
-                  Data Transferred
+                  Dream Bridge
                 </Typography>
                 <Typography variant="body1" fontWeight="medium">
                   {formatBytes(uploadJob.uploadedSize || 0)} / {formatBytes(uploadJob.totalSize || 0)}
