@@ -1,21 +1,17 @@
 import React from 'react';
 import { Navigate } from 'react-router-dom';
-import { STORAGE_KEYS, TOKEN_UTILS } from '../constants';
+import secureTokenStorage from '../utils/secureTokenStorage';
 
 const PrivateRoute = ({ children }) => {
-  const token = localStorage.getItem(STORAGE_KEYS.TOKEN);
+  // Use secure token storage for authentication check
+  const isAuthenticated = secureTokenStorage.isAuthenticated();
   
-  // Validate token structure and expiration
-  const isValidToken = token && TOKEN_UTILS.isValidJWT(token) && !TOKEN_UTILS.isTokenExpired(token);
-  
-  if (!isValidToken) {
-    // Clear invalid tokens
-    localStorage.removeItem(STORAGE_KEYS.TOKEN);
-    localStorage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
-    localStorage.removeItem(STORAGE_KEYS.USER);
+  if (!isAuthenticated) {
+    // Clear any invalid tokens
+    secureTokenStorage.clearTokens();
   }
   
-  return isValidToken ? children : <Navigate to="/login" replace />;
+  return isAuthenticated ? children : <Navigate to="/login" replace />;
 };
 
 export default PrivateRoute;

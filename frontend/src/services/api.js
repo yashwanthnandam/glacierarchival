@@ -1,15 +1,14 @@
 import axios from 'axios';
-import { API_CONFIG, STORAGE_KEYS } from '../constants';
+import { API_CONFIG } from '../constants';
+import secureTokenStorage from '../utils/secureTokenStorage';
 
 const api = axios.create(API_CONFIG);
 
-// Request interceptor to add token
+// Request interceptor to add authentication
 api.interceptors.request.use(
   config => {
-    const token = localStorage.getItem(STORAGE_KEYS.TOKEN);
-    if (token) {
-      config.headers['Authorization'] = `Bearer ${token}`;
-    }
+    const authHeaders = secureTokenStorage.getAuthHeaders();
+    Object.assign(config.headers, authHeaders);
     return config;
   },
   error => {
@@ -27,14 +26,14 @@ api.interceptors.response.use(
       originalRequest._retry = true;
 
       try {
-        const refreshToken = localStorage.getItem(STORAGE_KEYS.REFRESH_TOKEN);
+        const refreshToken = secureTokenStorage.getRefreshToken();
         if (refreshToken) {
           const response = await axios.post(`${API_CONFIG.baseURL}auth/refresh/`, {
             refresh: refreshToken
           });
 
           const { access } = response.data;
-          localStorage.setItem(STORAGE_KEYS.TOKEN, access);
+          secureTokenStorage.setAccessToken(access);
 
           // Retry the original request with new token
           originalRequest.headers['Authorization'] = `Bearer ${access}`;
@@ -42,8 +41,7 @@ api.interceptors.response.use(
         }
       } catch (refreshError) {
         // Refresh failed, redirect to login
-        localStorage.removeItem(STORAGE_KEYS.TOKEN);
-        localStorage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
+        secureTokenStorage.clearTokens();
         window.location.href = '/login';
         return Promise.reject(refreshError);
       }
@@ -77,6 +75,14 @@ api.interceptors.response.use(
 );
 
 export const authAPI = {
+  // Secure cookie-based authentication (recommended)
+  secureLogin: (data) => api.post('auth/secure/login/', data),
+  secureRefresh: () => api.post('auth/secure/refresh/'),
+  secureLogout: () => api.post('auth/secure/logout/'),
+  secureGetUser: () => api.get('auth/secure/user/'),
+  secureRegister: (data) => api.post('auth/secure/register/', data),
+  
+  // Legacy localStorage-based authentication (for backward compatibility)
   login: (data) => api.post('auth/login/', data),
   register: (data) => api.post('auth/register/', data),
   refresh: () => api.post('auth/refresh/'),

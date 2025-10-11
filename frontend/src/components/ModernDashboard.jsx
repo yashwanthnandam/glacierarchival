@@ -15,7 +15,8 @@ import {
   Tab,
   LinearProgress
 } from '../utils/muiImports';
-import { STORAGE_KEYS } from '../constants';
+import secureTokenStorage from '../utils/secureTokenStorage';
+import { authAPI } from '../services/api';
 import {
   Storage,
   CloudUpload,
@@ -30,7 +31,6 @@ import SimplifiedOverview from './SimplifiedOverview';
 import HibernationPlanDashboard from './HibernationPlanDashboard';
 import DataHibernateManager from './DataHibernateManager';
 import FilePreview from './FilePreview';
-import { authAPI } from '../services/api';
 
 const ModernDashboard = () => {
   const theme = useTheme();
@@ -71,9 +71,16 @@ const ModernDashboard = () => {
   // Handle logout
   const handleLogout = async () => {
     try {
-      localStorage.removeItem(STORAGE_KEYS.TOKEN);
-      localStorage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
-      localStorage.removeItem(STORAGE_KEYS.USER);
+      const useSecureAuth = import.meta.env.VITE_USE_SECURE_AUTH === 'true';
+      
+      if (useSecureAuth) {
+        // Use secure logout endpoint to clear httpOnly cookies
+        await authAPI.secureLogout();
+      } else {
+        // Legacy logout - clear localStorage
+        secureTokenStorage.clearTokens();
+      }
+      
       window.location.href = '/login';
     } catch (error) {
       // Only log errors in development

@@ -28,9 +28,14 @@ class S3Config(models.Model):
         return f"{self.user.username} - {self.bucket_name}"
 
     def set_secret_key(self, secret_key):
-        """Encrypt and store the AWS secret key"""
+        """Encrypt and store the AWS secret key - MANDATORY"""
         if not secret_key:
-            return
+            raise ValueError("AWS secret key is required and cannot be empty")
+        
+        # Validate encryption key is available
+        if not hasattr(settings, 'ENCRYPTION_KEY') or not settings.ENCRYPTION_KEY:
+            raise ValueError("Encryption is mandatory but ENCRYPTION_KEY is not configured")
+        
         try:
             f = Fernet(settings.ENCRYPTION_KEY.encode())
             self.aws_secret_key_encrypted = f.encrypt(secret_key.encode()).decode()
@@ -38,9 +43,14 @@ class S3Config(models.Model):
             raise ValueError(f"Failed to encrypt secret key: {str(e)}")
 
     def get_secret_key(self):
-        """Decrypt and return the AWS secret key"""
+        """Decrypt and return the AWS secret key - MANDATORY"""
         if not self.aws_secret_key_encrypted:
             return None
+        
+        # Validate encryption key is available
+        if not hasattr(settings, 'ENCRYPTION_KEY') or not settings.ENCRYPTION_KEY:
+            raise ValueError("Encryption is mandatory but ENCRYPTION_KEY is not configured")
+        
         try:
             f = Fernet(settings.ENCRYPTION_KEY.encode())
             return f.decrypt(self.aws_secret_key_encrypted.encode()).decode()
