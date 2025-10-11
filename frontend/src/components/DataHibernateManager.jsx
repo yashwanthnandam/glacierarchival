@@ -63,6 +63,7 @@ import { keyframes } from '@mui/system';
 import { mediaAPI } from '../services/api';
 import { useFileActions } from '../hooks/useFileActions';
 import DirectoryUploader from './DirectoryUploader';
+import DownloadProgressDialog from './DownloadProgressDialog';
 
 // Enhanced Upload Progress Bar Component with Better UX
 const UploadProgressBar = memo(({ uploadManagerState }) => {
@@ -418,8 +419,16 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
     return () => clearTimeout(timer);
   }, [uploadStatusText]);
   
-  // File actions (archive/delete); restore handled inline with Standard tier
-  const { handleArchive, handleDelete } = useFileActions(loadFiles);
+  // File actions (archive/delete/download); restore handled inline with Standard tier
+  const { 
+    handleArchive, 
+    handleDelete, 
+    handleDownload,
+    downloadDialogOpen, 
+    downloadInfo, 
+    setDownloadDialogOpen,
+    setDownloadInfo
+  } = useFileActions(loadFiles);
 
   // Selection management functions
   const toggleFileSelection = (fileId) => {
@@ -724,6 +733,160 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
       loadFiles(); // Refresh the file list
     } catch (error) {
       console.error('Bulk wake up failed:', error);
+    }
+  };
+
+  const handleBulkDownload = async () => {
+    const selectedFilesList = getSelectedFiles();
+    const selectedFoldersList = getSelectedFolders();
+    
+    if (selectedFilesList.length === 0 && selectedFoldersList.length === 0) {
+      return;
+    }
+
+    // Collect all files to be downloaded
+    const allFilesToDownload = [...selectedFilesList];
+    for (const folder of selectedFoldersList) {
+      const folderFiles = files.filter(f => f.relative_path?.startsWith(folder.path));
+      allFilesToDownload.push(...folderFiles);
+    }
+
+    // Filter only files that can be downloaded (not archived files)
+    const downloadableFiles = allFilesToDownload.filter(f => 
+      f.status === 'uploaded' || f.status === 'restored'
+    );
+
+    if (downloadableFiles.length === 0) {
+      alert('No files available for download. Files must be in "uploaded" or "restored" state.');
+      return;
+    }
+
+    try {
+      // Show download progress dialog
+      setDownloadInfo({
+        filename: `bulk_download_${Date.now()}.zip`,
+        file_size: downloadableFiles.reduce((sum, f) => sum + f.file_size, 0),
+        is_encrypted: downloadableFiles.some(f => f.is_encrypted),
+        encryption_metadata: null,
+        isBulkDownload: true,
+        fileCount: downloadableFiles.length
+      });
+      setDownloadDialogOpen(true);
+
+      // Create ZIP archive
+      const JSZip = (await import('jszip')).default;
+      const zip = new JSZip();
+
+      // Download and add files to ZIP
+      for (let i = 0; i < downloadableFiles.length; i++) {
+        const file = downloadableFiles[i];
+        
+        try {
+          // Get download info for this file
+          const response = await mediaAPI.downloadFile(file.id);
+          const { download_url, filename, file_size, is_encrypted, encryption_metadata } = response.data;
+          
+          // Download the file
+          const fileResponse = await fetch(download_url);
+          if (!fileResponse.ok) {
+            throw new Error(`Failed to download ${filename}: ${fileResponse.status}`);
+          }
+          
+          let fileBlob = await fileResponse.blob();
+          let finalFilename = filename;
+          
+          // Decrypt file if it's encrypted and encryption is enabled
+          if (is_encrypted && encryption_metadata && encryptionService.isEnabled()) {
+            try {
+              const encryptedFile = new File([fileBlob], filename, { type: fileBlob.type });
+              const decryptedFile = await encryptionService.decryptFileAfterDownload(
+                encryptedFile,
+                encryption_metadata
+              );
+              fileBlob = decryptedFile;
+              finalFilename = decryptedFile.name;
+            } catch (decryptionError) {
+              console.error(`Decryption failed for ${filename}:`, decryptionError);
+              throw new Error(`Decryption failed for ${filename}: ${decryptionError.message}`);
+            }
+          } else if (is_encrypted && !encryptionService.isEnabled()) {
+            throw new Error(`File ${filename} is encrypted but encryption service is not enabled. Please set up your master password first.`);
+          }
+          
+          // Add file to ZIP with proper path structure
+          const relativePath = file.relative_path || '';
+          const zipPath = relativePath ? `${relativePath}/${finalFilename}` : finalFilename;
+          zip.file(zipPath, fileBlob);
+          
+          // Update progress
+          const progress = Math.round(((i + 1) / downloadableFiles.length) * 100);
+          console.log(`Added ${finalFilename} to ZIP (${progress}%)`);
+          
+        } catch (fileError) {
+          console.error(`Failed to process file ${file.original_filename}:`, fileError);
+          // Continue with other files instead of failing completely
+        }
+      }
+      
+      // Generate ZIP file
+      console.log('Generating ZIP file...');
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      console.log(`ZIP generated successfully, size: ${zipBlob.size} bytes`);
+      
+      // Download the ZIP file
+      const zipUrl = window.URL.createObjectURL(zipBlob);
+      console.log('Created download URL:', zipUrl);
+      
+      const link = document.createElement('a');
+      link.href = zipUrl;
+      link.download = `download_${Date.now()}.zip`;
+      link.style.display = 'none';
+      
+      document.body.appendChild(link);
+      console.log('Triggering download...');
+      
+      // Trigger download
+      link.click();
+      
+      // Fallback: if download doesn't start, try alternative method
+      setTimeout(() => {
+        // Check if download started by looking for the blob URL
+        if (zipUrl && zipUrl.startsWith('blob:')) {
+          console.log('Download triggered successfully');
+        } else {
+          console.warn('Download may not have started, trying alternative method');
+          // Alternative download method
+          const iframe = document.createElement('iframe');
+          iframe.style.display = 'none';
+          iframe.src = zipUrl;
+          document.body.appendChild(iframe);
+          setTimeout(() => {
+            document.body.removeChild(iframe);
+          }, 2000);
+        }
+      }, 500);
+      
+      // Wait a moment before cleanup
+      setTimeout(() => {
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(zipUrl);
+        console.log('Download cleanup completed');
+      }, 2000);
+      
+      // Signal download completion to the dialog
+      setDownloadInfo(prev => ({ ...prev, downloadComplete: true }));
+      
+      // Close dialog and clear selection after a delay
+      setTimeout(() => {
+        setDownloadDialogOpen(false);
+        clearSelection();
+        console.log(`Bulk download completed: ${downloadableFiles.length} files in ZIP`);
+      }, 3000);
+      
+    } catch (error) {
+      console.error('Bulk download failed:', error);
+      setDownloadDialogOpen(false);
+      alert(`Bulk download failed: ${error.message}`);
     }
   };
 
@@ -1456,6 +1619,18 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
 
               {getSelectedCount() > 0 && (
                 <>
+                  <Tooltip title={`Download ${getSelectedCount()} items`}>
+                    <IconButton
+                      onClick={handleBulkDownload}
+                        size="small"
+                      sx={{
+                        bgcolor: alpha('#3b82f6', 0.1),
+                        '&:hover': { bgcolor: alpha('#3b82f6', 0.2) },
+                      }}
+                    >
+                      <CloudDownload sx={{ color: '#3b82f6' }} />
+                    </IconButton>
+                  </Tooltip>
                   <Tooltip title={`Hibernate ${getSelectedCount()} items`}>
                     <IconButton
                       onClick={handleBulkHibernate}
@@ -2213,6 +2388,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
                 variant="outlined"
                 startIcon={<CloudDownload />}
                 sx={{ textTransform: 'none', fontWeight: 600 }}
+                onClick={() => handleDownload(selectedFile)}
               >
                 Download
               </Button>
@@ -2364,6 +2540,14 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
           </Button>
         </DialogActions>
       </Dialog>
+      
+      {/* Download Progress Dialog */}
+      <DownloadProgressDialog
+        open={downloadDialogOpen}
+        onClose={() => setDownloadDialogOpen(false)}
+        downloadInfo={downloadInfo}
+      />
+      
       {/* Restore dialog removed; using Standard restore inline */}
     </Box>
   );

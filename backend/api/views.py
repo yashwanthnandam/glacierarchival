@@ -719,12 +719,16 @@ class MediaFileViewSet(viewsets.ModelViewSet):
             s3_service = S3Service(request.user)
             download_url = s3_service.generate_download_url(media_file.s3_key)
             
-            return Response({
+            response_data = {
                 'download_url': download_url,
                 'filename': media_file.original_filename,
                 'file_size': media_file.file_size,
-                'expires_in': 3600
-            })
+                'expires_in': 3600,
+                'is_encrypted': media_file.is_encrypted,
+                'encryption_metadata': media_file.encryption_metadata
+            }
+            
+            return Response(response_data)
         except ValueError as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
