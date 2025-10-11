@@ -38,6 +38,7 @@ import {
   getUploadStrategy,
   formatBytes 
 } from '../utils/uploadValidation';
+import encryptionService from '../services/encryptionService';
 
 const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelativePath = '' }) => {
   const [isUploading, setIsUploading] = useState(false);
@@ -47,6 +48,21 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
   const [uploadResults, setUploadResults] = useState([]);
   const [showResults, setShowResults] = useState(false);
   const [sessionId, setSessionId] = useState(null);
+  const [isEncryptionEnabled, setIsEncryptionEnabled] = useState(false);
+  
+  // Check encryption status on component mount
+  React.useEffect(() => {
+    const checkEncryptionStatus = () => {
+      const status = encryptionService.getEncryptionStatus();
+      setIsEncryptionEnabled(status.enabled);
+    };
+    
+    checkEncryptionStatus();
+    
+    // Check periodically in case encryption is enabled/disabled elsewhere
+    const interval = setInterval(checkEncryptionStatus, 1000);
+    return () => clearInterval(interval);
+  }, []);
   
   // Validation state
   const [validationErrors, setValidationErrors] = useState([]);
@@ -437,6 +453,29 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
         throw abortErr;
       }
       
+      let fileToUpload = fileData.file;
+      let encryptionMetadata = null;
+      
+      // Encrypt file if encryption is enabled
+      if (isEncryptionEnabled && encryptionService.isEnabled()) {
+        try {
+          const { encryptedFile, metadata } = await encryptionService.encryptFileForUpload(
+            fileData.file,
+            (progress, status) => {
+              console.log(`Encrypting ${fileData.name}: ${progress}% - ${status}`);
+            }
+          );
+          
+          fileToUpload = encryptedFile;
+          encryptionMetadata = metadata;
+          
+          console.log(`File encrypted: ${fileData.name} (${fileData.file.size} → ${encryptedFile.size} bytes)`);
+        } catch (encryptionError) {
+          console.error(`Encryption failed for ${fileData.name}:`, encryptionError);
+          throw new Error(`Encryption failed: ${encryptionError.message}`);
+        }
+      }
+      
       // Get presigned URL with simple retry
       const presignedResponse = await retryOperation(async () => {
         if (controller.signal.aborted) {
@@ -446,10 +485,11 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
         }
         return await uppyAPI.getPresignedUrl({
         filename: fileData.name,
-        fileType: fileData.type,
-        fileSize: fileData.size,
+        fileType: fileToUpload.type,
+        fileSize: fileToUpload.size,
         sessionId: sessionId,
-        relativePath: fileData.relativePath
+        relativePath: fileData.relativePath,
+        encryptionMetadata: encryptionMetadata
         });
       });
 
@@ -460,7 +500,7 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
       Object.keys(presignedUrl.fields).forEach(key => {
         formData.append(key, presignedUrl.fields[key]);
       });
-      formData.append('file', fileData.file);
+      formData.append('file', fileToUpload);
 
       // Simple timeout calculation (30 seconds + 1 second per MB)
       const timeout = 30000 + (fileData.size / 1024 / 1024) * 1000;
@@ -1286,6 +1326,23 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
               </Typography>
             </Alert>
           )}
+
+          {/* Encryption Status */}
+          <Alert 
+            severity={isEncryptionEnabled ? "success" : "warning"} 
+            sx={{ mt: 2 }}
+            icon={isEncryptionEnabled ? <CheckCircle /> : <ErrorIcon />}
+          >
+            <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 0.5 }}>
+              {isEncryptionEnabled ? '🔒 End-to-End Encryption Active' : '⚠️ Encryption Not Enabled'}
+            </Typography>
+            <Typography variant="body2">
+              {isEncryptionEnabled 
+                ? 'Files will be encrypted with AES-GCM 256-bit before upload. Only you can decrypt them.'
+                : 'Files will be uploaded without encryption. Enable E2E encryption for maximum security.'
+              }
+            </Typography>
+          </Alert>
 
           {/* Upload Status */}
           {uploadStatus && !isUploading && (

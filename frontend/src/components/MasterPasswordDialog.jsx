@@ -12,9 +12,12 @@ import {
   FormControlLabel,
   Checkbox,
   IconButton,
-  InputAdornment
+  InputAdornment,
+  LinearProgress,
+  Chip
 } from '@mui/material';
-import { Lock, Visibility, VisibilityOff, Security } from '@mui/icons-material';
+import { Lock, Visibility, VisibilityOff, Security, CheckCircle, Error } from '@mui/icons-material';
+import encryptionService from '../services/encryptionService';
 
 const MasterPasswordDialog = ({ open, onClose, onPasswordSet }) => {
   const [password, setPassword] = useState('');
@@ -23,10 +26,15 @@ const MasterPasswordDialog = ({ open, onClose, onPasswordSet }) => {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [rememberPassword, setRememberPassword] = useState(false);
   const [error, setError] = useState('');
+  const [isInitializing, setIsInitializing] = useState(false);
+  const [initProgress, setInitProgress] = useState(0);
+  const [initStatus, setInitStatus] = useState('');
+  const [testResult, setTestResult] = useState(null);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    setTestResult(null);
 
     if (!password) {
       setError('Password is required');
@@ -43,23 +51,68 @@ const MasterPasswordDialog = ({ open, onClose, onPasswordSet }) => {
       return;
     }
 
-    // Store password securely
-    if (rememberPassword) {
-      // In a real app, you'd use a secure storage method
-      localStorage.setItem('master_password_hash', btoa(password));
-    }
+    setIsInitializing(true);
+    setInitProgress(0);
+    setInitStatus('Initializing encryption...');
 
-    onPasswordSet(password);
-    setPassword('');
-    setConfirmPassword('');
-    onClose();
+    try {
+      // Initialize encryption service
+      setInitProgress(25);
+      setInitStatus('Setting up encryption keys...');
+      
+      await encryptionService.initializeEncryption(password);
+      
+      setInitProgress(50);
+      setInitStatus('Testing encryption...');
+      
+      // Test encryption to ensure it works
+      const testResult = await encryptionService.testEncryption();
+      setTestResult(testResult);
+      
+      if (!testResult.success) {
+        throw new Error(testResult.error || 'Encryption test failed');
+      }
+      
+      setInitProgress(75);
+      setInitStatus('Finalizing setup...');
+      
+      // Store password securely if requested
+      if (rememberPassword) {
+        // Note: In production, use a more secure method
+        localStorage.setItem('encryption_enabled', 'true');
+        localStorage.setItem('encryption_initialized', Date.now().toString());
+      }
+      
+      setInitProgress(100);
+      setInitStatus('Encryption ready!');
+      
+      // Wait a moment to show completion
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      onPasswordSet(password);
+      setPassword('');
+      setConfirmPassword('');
+      onClose();
+      
+    } catch (error) {
+      console.error('Encryption initialization failed:', error);
+      setError(`Encryption setup failed: ${error.message}`);
+      encryptionService.disableEncryption();
+    } finally {
+      setIsInitializing(false);
+      setInitProgress(0);
+      setInitStatus('');
+    }
   };
 
   const handleClose = () => {
-    setPassword('');
-    setConfirmPassword('');
-    setError('');
-    onClose();
+    if (!isInitializing) {
+      setPassword('');
+      setConfirmPassword('');
+      setError('');
+      setTestResult(null);
+      onClose();
+    }
   };
 
   return (
@@ -73,14 +126,62 @@ const MasterPasswordDialog = ({ open, onClose, onPasswordSet }) => {
       
       <DialogContent>
         <Alert severity="info" sx={{ mb: 2 }}>
-          Your master password encrypts all files before upload. Only you can decrypt them.
-          Choose a strong password and keep it safe - it cannot be recovered if lost.
+          <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 1 }}>
+            🔒 True End-to-End Encryption
+          </Typography>
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            Your master password encrypts all files using <strong>AES-GCM 256-bit encryption</strong> before upload. 
+            Only you can decrypt them - not even we can access your files.
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 1 }}>
+            <Chip label="AES-GCM 256-bit" size="small" color="primary" />
+            <Chip label="PBKDF2 (100k iterations)" size="small" color="primary" />
+            <Chip label="Zero-Knowledge" size="small" color="primary" />
+            <Chip label="Open Source" size="small" color="success" />
+          </Box>
+          <Typography variant="body2" sx={{ mt: 1, fontStyle: 'italic' }}>
+            Choose a strong password and keep it safe - it cannot be recovered if lost.
+          </Typography>
         </Alert>
 
         {error && (
           <Alert severity="error" sx={{ mb: 2 }}>
             {error}
           </Alert>
+        )}
+
+        {testResult && (
+          <Alert 
+            severity={testResult.success ? "success" : "error"} 
+            sx={{ mb: 2 }}
+            icon={testResult.success ? <CheckCircle /> : <Error />}
+          >
+            <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 1 }}>
+              {testResult.success ? '✅ Encryption Test Passed' : '❌ Encryption Test Failed'}
+            </Typography>
+            <Typography variant="body2">
+              {testResult.message}
+            </Typography>
+            {testResult.success && (
+              <Typography variant="body2" sx={{ mt: 1 }}>
+                Duration: {testResult.duration}ms | 
+                Compression: {testResult.compressionRatio}x
+              </Typography>
+            )}
+          </Alert>
+        )}
+
+        {isInitializing && (
+          <Box sx={{ mb: 2 }}>
+            <Typography variant="body2" sx={{ mb: 1 }}>
+              {initStatus}
+            </Typography>
+            <LinearProgress 
+              variant="determinate" 
+              value={initProgress} 
+              sx={{ height: 8, borderRadius: 4 }}
+            />
+          </Box>
         )}
 
         <Box component="form" onSubmit={handleSubmit}>
@@ -109,7 +210,8 @@ const MasterPasswordDialog = ({ open, onClose, onPasswordSet }) => {
                 </InputAdornment>
               ),
             }}
-            helperText="Minimum 8 characters, used to encrypt your files"
+            helperText="Minimum 8 characters, used to derive encryption keys"
+            disabled={isInitializing}
           />
 
           <TextField
@@ -137,6 +239,7 @@ const MasterPasswordDialog = ({ open, onClose, onPasswordSet }) => {
                 </InputAdornment>
               ),
             }}
+            disabled={isInitializing}
           />
 
           <FormControlLabel
@@ -144,6 +247,7 @@ const MasterPasswordDialog = ({ open, onClose, onPasswordSet }) => {
               <Checkbox
                 checked={rememberPassword}
                 onChange={(e) => setRememberPassword(e.target.checked)}
+                disabled={isInitializing}
               />
             }
             label="Remember password for this session (not recommended for shared devices)"
@@ -153,16 +257,17 @@ const MasterPasswordDialog = ({ open, onClose, onPasswordSet }) => {
       </DialogContent>
 
       <DialogActions>
-        <Button onClick={handleClose}>
+        <Button onClick={handleClose} disabled={isInitializing}>
           Cancel
         </Button>
         <Button 
           onClick={handleSubmit} 
           variant="contained" 
           color="primary"
-          disabled={!password || !confirmPassword}
+          disabled={!password || !confirmPassword || isInitializing}
+          startIcon={isInitializing ? <Security /> : <Lock />}
         >
-          Set Password
+          {isInitializing ? 'Setting Up Encryption...' : 'Enable E2E Encryption'}
         </Button>
       </DialogActions>
     </Dialog>
