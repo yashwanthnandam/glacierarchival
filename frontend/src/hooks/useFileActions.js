@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { mediaAPI } from '../services/api';
 import { RESTORE_TIERS } from '../constants/fileStates';
+import encryptionService from '../services/encryptionService';
 
 /**
  * Shared hook for file actions (download, archive, restore, delete)
@@ -10,26 +11,81 @@ export const useFileActions = (onRefresh) => {
   const [loading, setLoading] = useState(false);
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [restoreFile, setRestoreFile] = useState(null);
+  const [downloadDialogOpen, setDownloadDialogOpen] = useState(false);
+  const [downloadInfo, setDownloadInfo] = useState(null);
 
-  // Handle download
+  // Handle download with optional decryption
   const handleDownload = async (file) => {
     try {
       const response = await mediaAPI.downloadFile(file.id);
+      const { download_url, filename, file_size, is_encrypted, encryption_metadata } = response.data;
       
-      // Create blob and download
-      const blob = new Blob([response.data]);
-      const url = window.URL.createObjectURL(blob);
+      // Show download progress dialog
+      setDownloadInfo({
+        filename,
+        file_size,
+        is_encrypted,
+        encryption_metadata
+      });
+      setDownloadDialogOpen(true);
+      
+      // Download the file from the presigned URL
+      const fileResponse = await fetch(download_url);
+      if (!fileResponse.ok) {
+        throw new Error(`Failed to download file: ${fileResponse.status}`);
+      }
+      
+      const fileBlob = await fileResponse.blob();
+      let finalBlob = fileBlob;
+      let finalFilename = filename;
+      
+      // Decrypt file if it's encrypted and encryption is enabled
+      if (is_encrypted && encryption_metadata && encryptionService.isEnabled()) {
+        try {
+          console.log(`Decrypting file: ${filename}`);
+          
+          // Create a File object from the blob
+          const encryptedFile = new File([fileBlob], filename, { type: fileBlob.type });
+          
+          // Decrypt the file
+          const decryptedFile = await encryptionService.decryptFileAfterDownload(
+            encryptedFile,
+            encryption_metadata,
+            (progress, status) => {
+              console.log(`Decrypting ${filename}: ${progress}% - ${status}`);
+            }
+          );
+          
+          finalBlob = decryptedFile;
+          finalFilename = decryptedFile.name;
+          
+          console.log(`File decrypted successfully: ${filename}`);
+        } catch (decryptionError) {
+          console.error(`Decryption failed for ${filename}:`, decryptionError);
+          throw new Error(`Decryption failed: ${decryptionError.message}`);
+        }
+      } else if (is_encrypted && !encryptionService.isEnabled()) {
+        throw new Error('File is encrypted but encryption service is not enabled. Please set up your master password first.');
+      }
+      
+      // Create download link
+      const url = window.URL.createObjectURL(finalBlob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = file.original_filename;
+      link.download = finalFilename;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       window.URL.revokeObjectURL(url);
       
-      return { success: true, message: `Download started for ${file.original_filename}` };
+      // Close dialog after successful download
+      setDownloadDialogOpen(false);
+      
+      const encryptionStatus = is_encrypted ? ' (decrypted)' : '';
+      return { success: true, message: `Download started for ${finalFilename}${encryptionStatus}` };
     } catch (error) {
       console.error('Download failed:', error);
+      setDownloadDialogOpen(false);
       throw error;
     }
   };
@@ -228,6 +284,10 @@ export const useFileActions = (onRefresh) => {
     restoreFile,
     setRestoreDialogOpen,
     setRestoreFile,
+    downloadDialogOpen,
+    downloadInfo,
+    setDownloadDialogOpen,
+    setDownloadInfo,
     handleDownload,
     handleArchive,
     handleRestore,

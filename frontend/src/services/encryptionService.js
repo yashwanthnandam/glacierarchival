@@ -12,7 +12,7 @@
  * - Automatic metadata management
  */
 
-import GlacierEncryption from './glacierEncryption.js';
+import GlacierEncryption from '../utils/glacierEncryption.js';
 
 class EncryptionService {
   constructor() {
