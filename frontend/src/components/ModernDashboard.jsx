@@ -23,7 +23,11 @@ import {
   AcUnit,
   Notifications,
   Settings,
-  Logout
+  Logout,
+  Security,
+  Lock,
+  LockOpen,
+  Info
 } from '../utils/muiImports';
 
 // Import our simplified components
@@ -31,6 +35,9 @@ import SimplifiedOverview from './SimplifiedOverview';
 import HibernationPlanDashboard from './HibernationPlanDashboard';
 import DataHibernateManager from './DataHibernateManager';
 import FilePreview from './FilePreview';
+import MasterPasswordDialog from './MasterPasswordDialog';
+import WhyDataHibernate from './WhyDataHibernate';
+import encryptionService from '../services/encryptionService';
 
 const ModernDashboard = () => {
   const theme = useTheme();
@@ -43,17 +50,24 @@ const ModernDashboard = () => {
   const [loading, setLoading] = useState(true);
   const [profileMenuAnchor, setProfileMenuAnchor] = useState(null);
   const [globalSearch, setGlobalSearch] = useState('');
+  
+  // Encryption state
+  const [encryptionEnabled, setEncryptionEnabled] = useState(false);
+  const [showPasswordDialog, setShowPasswordDialog] = useState(false);
+  const [encryptionStatus, setEncryptionStatus] = useState(null);
 
   // Navigation items - simplified
   const navigationItems = [
     { id: 'overview', label: 'Overview', icon: <Storage />, view: 'overview' },
     { id: 'hibernate', label: 'Data Manager', icon: <AcUnit />, view: 'hibernate' },
-    { id: 'plans', label: 'Plans', icon: <CloudUpload />, view: 'plans' }
+    { id: 'plans', label: 'Plans', icon: <CloudUpload />, view: 'plans' },
+    { id: 'why', label: 'Why Data Hibernate', icon: <Info />, view: 'why' }
   ];
 
   // Load user data on component mount
   useEffect(() => {
     loadUserData();
+    checkEncryptionStatus();
   }, []);
 
   // Load user data
@@ -66,6 +80,32 @@ const ModernDashboard = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Check encryption status
+  const checkEncryptionStatus = () => {
+    const status = encryptionService.getEncryptionStatus();
+    setEncryptionEnabled(status.enabled);
+    setEncryptionStatus(status);
+  };
+
+  // Handle encryption toggle
+  const handleEncryptionToggle = () => {
+    if (encryptionEnabled) {
+      // Disable encryption
+      encryptionService.disableEncryption();
+      setEncryptionEnabled(false);
+      setEncryptionStatus(null);
+    } else {
+      // Show password dialog to enable encryption
+      setShowPasswordDialog(true);
+    }
+  };
+
+  // Handle password set
+  const handlePasswordSet = (password) => {
+    checkEncryptionStatus();
+    setShowPasswordDialog(false);
   };
 
   // Handle logout
@@ -130,6 +170,9 @@ const ModernDashboard = () => {
       case 'plans':
         return <HibernationPlanDashboard />;
       
+      case 'why':
+        return <WhyDataHibernate />;
+      
       default:
         return <SimplifiedOverview />;
     }
@@ -179,6 +222,21 @@ const ModernDashboard = () => {
 
           {/* Right side actions */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            {/* Encryption Toggle */}
+            <IconButton 
+              color="inherit" 
+              onClick={handleEncryptionToggle}
+              title={encryptionEnabled ? 'Disable E2E Encryption' : 'Enable E2E Encryption'}
+              sx={{ 
+                color: encryptionEnabled ? 'success.main' : 'text.secondary',
+                '&:hover': {
+                  bgcolor: encryptionEnabled ? 'success.light' : 'action.hover'
+                }
+              }}
+            >
+              {encryptionEnabled ? <Lock /> : <LockOpen />}
+            </IconButton>
+
             <IconButton color="inherit">
               <Badge badgeContent={0} color="error">
                 <Notifications />
@@ -227,6 +285,13 @@ const ModernDashboard = () => {
           onClose={() => setPreviewFile(null)}
         />
       )}
+
+      {/* Master Password Dialog */}
+      <MasterPasswordDialog
+        open={showPasswordDialog}
+        onClose={() => setShowPasswordDialog(false)}
+        onPasswordSet={handlePasswordSet}
+      />
     </Box>
   );
 };

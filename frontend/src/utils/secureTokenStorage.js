@@ -8,7 +8,7 @@ import { STORAGE_KEYS, TOKEN_UTILS } from '../constants';
 class SecureTokenStorage {
   constructor() {
     this.isProduction = import.meta.env.PROD;
-    this.useHttpOnly = this.isProduction || this.supportsHttpOnly();
+    this.useHttpOnly = this.supportsHttpOnly();
     this.csrfToken = null;
   }
 

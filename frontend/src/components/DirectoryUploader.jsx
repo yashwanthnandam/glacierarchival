@@ -27,7 +27,10 @@ import {
   Error as ErrorIcon,
   Close,
   Refresh,
-  Stop
+  Stop,
+  Security,
+  Lock,
+  LockOpen
 } from '@mui/icons-material';
 import StorageLimitError from './StorageLimitError';
 import { uppyAPI } from '../services/api';
@@ -62,11 +65,25 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
   const [abortController, setAbortController] = useState(null);
   const [isCancelling, setIsCancelling] = useState(false);
   const [activeWorkers, setActiveWorkers] = useState([]);
+  const [encryptionEnabled, setEncryptionEnabled] = useState(false);
   const fileInputRef = useRef(null);
   const directoryInputRef = useRef(null);
   const abortControllerRef = useRef(null);
   const uploadInProgressRef = useRef(false); // Prevent race conditions
 
+  // Check encryption status on mount
+  useEffect(() => {
+    const checkEncryptionStatus = () => {
+      const status = encryptionService.getEncryptionStatus();
+      setEncryptionEnabled(status.enabled);
+    };
+    
+    checkEncryptionStatus();
+    
+    // Listen for encryption status changes
+    const interval = setInterval(checkEncryptionStatus, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Handle file selection (individual files) with validation
   const handleFileSelect = useCallback(async (event) => {
@@ -443,6 +460,27 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
       
       let fileToUpload = fileData.file;
       let encryptionMetadata = null;
+      
+      // Check if encryption is enabled and encrypt file if needed
+      if (encryptionService.isEnabled()) {
+        try {
+          console.log(`Encrypting file: ${fileData.name}`);
+          const { encryptedFile, metadata } = await encryptionService.encryptFileForUpload(
+            fileData.file,
+            (progress, status) => {
+              console.log(`Encryption progress for ${fileData.name}: ${progress}% - ${status}`);
+            }
+          );
+          
+          fileToUpload = encryptedFile;
+          encryptionMetadata = metadata;
+          
+          console.log(`File encrypted: ${fileData.name} (${fileData.file.size} → ${encryptedFile.size} bytes)`);
+        } catch (encryptionError) {
+          console.error(`Encryption failed for ${fileData.name}:`, encryptionError);
+          throw new Error(`Encryption failed for ${fileData.name}: ${encryptionError.message}`);
+        }
+      }
       
       // Get presigned URL with simple retry
       const presignedResponse = await retryOperation(async () => {
@@ -1314,6 +1352,23 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
               </Typography>
             </Alert>
           )}
+
+          {/* Encryption Status */}
+          <Alert 
+            severity={encryptionEnabled ? "success" : "info"} 
+            sx={{ mt: 2 }}
+            icon={encryptionEnabled ? <Lock /> : <LockOpen />}
+          >
+            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+              {encryptionEnabled ? '🔒 E2E Encryption Enabled' : '🔓 E2E Encryption Disabled'}
+            </Typography>
+            <Typography variant="caption" sx={{ display: 'block', mt: 0.5 }}>
+              {encryptionEnabled 
+                ? 'Files will be encrypted with AES-GCM 256-bit before upload. Only you can decrypt them.'
+                : 'Files will be uploaded without encryption. Enable E2E encryption from the dashboard for maximum security.'
+              }
+            </Typography>
+          </Alert>
 
           {/* Upload Status */}
           {uploadStatus && !isUploading && (

@@ -34,6 +34,7 @@ import {
 } from '@mui/material';
 // Import centralized file state configuration
 import { getFileStateConfig as getCentralizedFileStateConfig } from '../utils/fileStateConfig';
+import encryptionService from '../services/encryptionService';
 import {
   Folder,
   FolderOpen,
@@ -48,6 +49,9 @@ import {
   Info,
   Search,
   ExpandMore,
+  Security,
+  Lock,
+  LockOpen,
   ChevronRight,
   Refresh,
   DragIndicator,
@@ -388,6 +392,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
   const [uploadProgress, setUploadProgress] = useState({});
   const [overallUploadProgress, setOverallUploadProgress] = useState(0);
   const [overallUploadLabel, setOverallUploadLabel] = useState('');
+  const [encryptionEnabled, setEncryptionEnabled] = useState(false);
   const showLeftPanel = false; // Hide sidebar for edge-to-edge layout
   
   // Check if there are active upload operations - memoized to prevent flickering
@@ -1075,6 +1080,20 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
   // Load files
   useEffect(() => {
     loadFiles();
+  }, []);
+
+  // Check encryption status
+  useEffect(() => {
+    const checkEncryptionStatus = () => {
+      const status = encryptionService.getEncryptionStatus();
+      setEncryptionEnabled(status.enabled);
+    };
+    
+    checkEncryptionStatus();
+    
+    // Listen for encryption status changes
+    const interval = setInterval(checkEncryptionStatus, 1000);
+    return () => clearInterval(interval);
   }, []);
 
   // Keep upload area/progress visible if uploads are queued or in progress
@@ -1768,6 +1787,25 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
                 <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 📊 File Status Summary
               </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                {encryptionEnabled ? (
+                  <Chip
+                    icon={<Lock />}
+                    label="E2E Encryption Enabled"
+                    size="small"
+                    color="success"
+                    variant="outlined"
+                  />
+                ) : (
+                  <Chip
+                    icon={<LockOpen />}
+                    label="E2E Encryption Disabled"
+                    size="small"
+                    color="default"
+                    variant="outlined"
+                  />
+                )}
+              </Box>
                 {(() => {
                   const statusCounts = filteredFiles.reduce((acc, file) => {
                     acc[file.status] = (acc[file.status] || 0) + 1;
@@ -2184,17 +2222,24 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
 
                             {/* File Name */}
                             <Tooltip title={file.original_filename}>
-                              <Typography
-                                variant="body2"
-                                sx={{
-                                  fontWeight: 600,
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
-                                  whiteSpace: 'nowrap',
-                                }}
-                              >
-                                {file.original_filename}
-                              </Typography>
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                <Typography
+                                  variant="body2"
+                                  sx={{
+                                    fontWeight: 600,
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap',
+                                  }}
+                                >
+                                  {file.original_filename}
+                                </Typography>
+                                {file.is_encrypted && (
+                                  <Tooltip title="Encrypted with E2E encryption">
+                                    <Lock sx={{ fontSize: 12, color: 'success.main' }} />
+                                  </Tooltip>
+                                )}
+                              </Box>
                             </Tooltip>
 
                             {/* File Info */}

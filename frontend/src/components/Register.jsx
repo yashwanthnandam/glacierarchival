@@ -57,6 +57,10 @@ const Register = () => {
     if (error.response?.status === 409) {
       return 'Username or email already exists. Please choose different credentials.';
     }
+    if (error.response?.status === 201) {
+      // Handle successful registration with email error
+      return error.response.data?.error || 'Registration successful but email verification failed.';
+    }
     if (error.response?.status >= 500) {
       return 'Server error. Please try again later.';
     }
