@@ -11,6 +11,7 @@ import {
 } from '@mui/material';
 import { useNavigate, Link as RouterLink } from 'react-router-dom';
 import { authAPI } from '../services/api';
+import { STORAGE_KEYS, VALIDATION, TOKEN_UTILS } from '../constants';
 
 const Login = () => {
   const [username, setUsername] = useState('');
@@ -19,22 +20,76 @@ const Login = () => {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
+  const validateForm = () => {
+    const errors = {};
+    
+    if (!username.trim()) {
+      errors.username = 'Username is required';
+    } else if (username.length < VALIDATION.USERNAME_MIN_LENGTH) {
+      errors.username = `Username must be at least ${VALIDATION.USERNAME_MIN_LENGTH} characters`;
+    } else if (username.length > VALIDATION.USERNAME_MAX_LENGTH) {
+      errors.username = `Username must be less than ${VALIDATION.USERNAME_MAX_LENGTH} characters`;
+    }
+    
+    if (!password) {
+      errors.password = 'Password is required';
+    } else if (password.length < VALIDATION.PASSWORD_MIN_LENGTH) {
+      errors.password = `Password must be at least ${VALIDATION.PASSWORD_MIN_LENGTH} characters`;
+    }
+    
+    return errors;
+  };
+
+  const getErrorMessage = (error) => {
+    if (error.response?.status === 401) {
+      return 'Invalid username or password. Please check your credentials.';
+    }
+    if (error.response?.status === 429) {
+      return 'Too many login attempts. Please try again later.';
+    }
+    if (error.response?.status >= 500) {
+      return 'Server error. Please try again later.';
+    }
+    if (error.code === 'NETWORK_ERROR' || !error.response) {
+      return 'Network error. Please check your connection.';
+    }
+    return 'Login failed. Please try again.';
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError('');
     
+    // Validate form
+    const validationErrors = validateForm();
+    if (Object.keys(validationErrors).length > 0) {
+      setError(Object.values(validationErrors)[0]);
+      setLoading(false);
+      return;
+    }
+    
     try {
       const response = await authAPI.login({ username, password });
       const { access, refresh } = response.data;
       
-      localStorage.setItem('token', access);
-      localStorage.setItem('refreshToken', refresh);
+      // Validate tokens before storing
+      if (!TOKEN_UTILS.isValidJWT(access) || !TOKEN_UTILS.isValidJWT(refresh)) {
+        throw new Error('Invalid token received from server');
+      }
+      
+      localStorage.setItem(STORAGE_KEYS.TOKEN, access);
+      localStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, refresh);
       
       navigate('/dashboard');
     } catch (err) {
-      setError('Login failed. Please check your credentials.');
-      console.error('Login error:', err);
+      const errorMessage = getErrorMessage(err);
+      setError(errorMessage);
+      
+      // Only log errors in development
+      if (import.meta.env.VITE_DEBUG === 'true') {
+        console.error('Login error:', err);
+      }
     } finally {
       setLoading(false);
     }

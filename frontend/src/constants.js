@@ -1,6 +1,6 @@
 // Simplified application constants
 export const API_CONFIG = {
-  baseURL: 'http://localhost:8000/api/',
+  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/',
   timeout: 30000,
 };
 
@@ -105,4 +105,43 @@ export const VALIDATION = {
   USERNAME_MAX_LENGTH: 30,
   PASSWORD_MIN_LENGTH: 8,
   PASSWORD_MAX_LENGTH: 128,
+};
+
+// Token validation utilities
+export const TOKEN_UTILS = {
+  isValidJWT: (token) => {
+    if (!token || typeof token !== 'string') return false;
+    try {
+      const parts = token.split('.');
+      if (parts.length !== 3) return false;
+      
+      const payload = JSON.parse(atob(parts[1]));
+      const now = Date.now() / 1000;
+      
+      // Check if token is expired
+      if (payload.exp && payload.exp < now) return false;
+      
+      // Check if token has required fields
+      return !!(payload.user_id && payload.exp);
+    } catch (error) {
+      return false;
+    }
+  },
+  
+  getTokenPayload: (token) => {
+    if (!token) return null;
+    try {
+      const parts = token.split('.');
+      if (parts.length !== 3) return null;
+      return JSON.parse(atob(parts[1]));
+    } catch (error) {
+      return null;
+    }
+  },
+  
+  isTokenExpired: (token) => {
+    const payload = TOKEN_UTILS.getTokenPayload(token);
+    if (!payload || !payload.exp) return true;
+    return payload.exp < Date.now() / 1000;
+  }
 };

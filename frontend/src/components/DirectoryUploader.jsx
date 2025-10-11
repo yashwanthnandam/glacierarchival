@@ -31,6 +31,7 @@ import {
 } from '@mui/icons-material';
 import { uppyAPI } from '../services/api';
 import uploadManager from '../services/uploadManager';
+import { STORAGE_KEYS } from '../constants';
 import { 
   validateFileCollection, 
   checkStorageLimit, 
@@ -825,7 +826,7 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
         files: batchFiles,
         sessionId: sessionId,
         batchSize: 50,
-        accessToken: localStorage.getItem('token')
+        accessToken: localStorage.getItem(STORAGE_KEYS.TOKEN)
       });
       
       // Handle cancellation by sending cancel message then terminating the worker
@@ -964,7 +965,7 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
         files: allFiles,
         sessionId: sessionId,
         batchSize: 50, // Increased from 10 to 50 for better performance
-        accessToken: localStorage.getItem('token')
+        accessToken: localStorage.getItem(STORAGE_KEYS.TOKEN)
       });
       
       // Handle cancellation by sending cancel message then terminating the worker
