@@ -112,12 +112,22 @@ class SecureTokenStorage {
 
   /**
    * Check if user is authenticated
+   * CRITICAL: For httpOnly cookies, we MUST verify with server
    */
-  isAuthenticated() {
+  async isAuthenticated() {
     if (this.useHttpOnly) {
-      // With httpOnly cookies, we can't directly check token validity
-      // We'll need to make a request to the server to verify authentication
-      return true; // Assume authenticated if using httpOnly cookies
+      // For httpOnly cookies, verify with server
+      try {
+        const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/'}auth/secure/user/`, {
+          method: 'GET',
+          credentials: 'include', // Send cookies
+          headers: this.getAuthHeaders()
+        });
+        return response.ok;
+      } catch (error) {
+        console.error('Authentication check failed:', error);
+        return false;
+      }
     } else {
       const token = this.getAccessToken();
       return token && TOKEN_UTILS.isValidJWT(token) && !TOKEN_UTILS.isTokenExpired(token);

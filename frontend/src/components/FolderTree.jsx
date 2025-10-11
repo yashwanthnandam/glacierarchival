@@ -659,7 +659,7 @@ const FolderTree = ({
                 
                 {/* Archive button (for uploaded files) - Always show for testing */}
                 {((item.file?.status === 'uploaded' || item.file?.status === 'archived') || !item.file?.status) && (
-                  <Tooltip title="Archive to Glacier">
+                  <Tooltip title="Put to Deep Sleep">
                     <IconButton
                       size="small"
                       onClick={(e) => {

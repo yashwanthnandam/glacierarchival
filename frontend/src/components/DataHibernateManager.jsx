@@ -32,6 +32,8 @@ import {
   DialogContent,
   DialogActions,
 } from '@mui/material';
+// Import centralized file state configuration
+import { getFileStateConfig as getCentralizedFileStateConfig } from '../utils/fileStateConfig';
 import {
   Folder,
   FolderOpen,
@@ -1784,7 +1786,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
                         sx={{ bgcolor: alpha('#a78bfa', 0.15), color: '#6b21a8', fontWeight: 600 }}
                       />
                       <Chip
-                        label={`Active: ${((statusCounts.uploaded || 0) + (statusCounts.restored || 0))}`}
+                        label={`Awake Mode: ${((statusCounts.uploaded || 0) + (statusCounts.restored || 0))}`}
                         size="small"
                         sx={{ bgcolor: alpha('#60a5fa', 0.15), color: '#0c4a6e', fontWeight: 600 }}
                       />

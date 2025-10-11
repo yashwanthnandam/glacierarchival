@@ -47,7 +47,7 @@ const ModernDashboard = () => {
   // Navigation items - simplified
   const navigationItems = [
     { id: 'overview', label: 'Overview', icon: <Storage />, view: 'overview' },
-    { id: 'hibernate', label: 'Data Hibernate', icon: <AcUnit />, view: 'hibernate' },
+    { id: 'hibernate', label: 'Data Manager', icon: <AcUnit />, view: 'hibernate' },
     { id: 'plans', label: 'Plans', icon: <CloudUpload />, view: 'plans' }
   ];
 
@@ -154,7 +154,7 @@ const ModernDashboard = () => {
       <AppBar position="static" elevation={1} sx={{ bgcolor: 'white', color: 'text.primary' }}>
         <Toolbar>
           <Typography variant="h6" component="div" sx={{ fontWeight: 'bold', mr: 4 }}>
-            Glacier Archival
+            Data Hibernate
           </Typography>
 
           {/* Navigation Tabs */}

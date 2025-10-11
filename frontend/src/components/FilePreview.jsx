@@ -293,7 +293,7 @@ const FilePreview = ({
                       fullWidth
                       onClick={() => handleAction('archive')}
                     >
-                      Archive
+                      Put to Sleep
                     </Button>
                   </Grid>
                 )}

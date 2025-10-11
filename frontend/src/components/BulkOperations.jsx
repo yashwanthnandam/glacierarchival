@@ -275,7 +275,7 @@ const BulkOperations = ({
   // Available bulk actions
   const bulkActions = [
     { id: 'download', label: 'Download', icon: <CloudDownload />, color: 'primary' },
-    { id: 'archive', label: 'Archive', icon: <Archive />, color: 'info' },
+    { id: 'archive', label: 'Put to Sleep', icon: <Archive />, color: 'info' },
     { id: 'restore', label: 'Restore', icon: <RestoreFromTrash />, color: 'warning' },
     { id: 'share', label: 'Share', icon: <Share />, color: 'success' },
     { id: 'delete', label: 'Delete', icon: <Delete />, color: 'error' }
