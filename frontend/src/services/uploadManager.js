@@ -1,0 +1,493 @@
+/*
+ * UploadManager singleton
+ * - Owns upload queue independent of React component lifecycle
+ * - Persists queue/progress to IndexedDB via indexedDBService
+ * - Survives route changes; UI can subscribe to state updates
+ */
+
+import indexedDBService from './indexedDBService';
+import { mediaAPI, uppyAPI } from './api';
+
+class UploadManager {
+  constructor() {
+    this.queue = []; // [{ id, file, relativePath, status, progress, s3Key, error }]
+    this.subscribers = new Set();
+    this.isRunning = false;
+    this.concurrent = 3;
+    this.activeCount = 0;
+    this.initialized = false;
+    this._emitThrottled = this._throttle(this._emit.bind(this), 200);
+    this.activeWorkers = new Set();
+    this._uploadSessionActive = false; // Simple flag to prevent cleanup during uploads
+    this._currentSessionTotal = 0; // Fixed total for current upload session
+  }
+
+  // Throttle utility to limit function calls
+  _throttle(func, delay) {
+    let timeoutId;
+    let lastExecTime = 0;
+    return function (...args) {
+      const currentTime = Date.now();
+      
+      if (currentTime - lastExecTime > delay) {
+        func.apply(this, args);
+        lastExecTime = currentTime;
+      } else {
+        clearTimeout(timeoutId);
+        timeoutId = setTimeout(() => {
+          func.apply(this, args);
+          lastExecTime = Date.now();
+        }, delay - (currentTime - lastExecTime));
+      }
+    };
+  }
+
+  async init() {
+    if (this.initialized) return;
+    await indexedDBService.init();
+    const persisted = await indexedDBService.getQueuedUploads();
+    // Normalize persisted entries
+    this.queue = (persisted || []).map((u) => ({
+      id: u.id,
+      file: u.file || null, // may be null if we only persisted meta
+      relativePath: u.relativePath || '',
+      status: u.status || 'queued',
+      progress: u.progress || 0,
+      s3Key: u.s3Key || '',
+      error: undefined,
+    }));
+    this.initialized = true;
+    this._emit();
+  }
+
+  subscribe(fn) {
+    this.subscribers.add(fn);
+    // immediate push
+    try { fn(this.getState()); } catch {}
+    return () => this.subscribers.delete(fn);
+  }
+
+  getState() {
+    // Use Map for O(1) lookups instead of array filtering - much faster for large queues
+    const statusCounts = new Map();
+    const operationTypeCounts = new Map();
+    let totalSize = 0;
+    // Upload-only counters (exclude delete/other operations)
+    let uploadQueued = 0;
+    let uploadInProgress = 0;
+    let uploadFailed = 0;
+    let uploadCompleted = 0;
+    let uploadTotal = 0;
+    
+    // Single pass through queue for maximum efficiency
+    for (const item of this.queue) {
+      // Count by status
+      statusCounts.set(item.status, (statusCounts.get(item.status) || 0) + 1);
+      
+      // Count by operation type
+      const opType = item.operationType || 'upload';
+      operationTypeCounts.set(opType, (operationTypeCounts.get(opType) || 0) + 1);
+      
+      // Upload-only counters
+      if (opType === 'upload') {
+        uploadTotal += 1;
+        if (item.status === 'queued') uploadQueued += 1;
+        else if (item.status === 'uploading') uploadInProgress += 1;
+        else if (item.status === 'failed') uploadFailed += 1;
+        else if (item.status === 'completed') uploadCompleted += 1;
+        // Note: cancelled uploads are excluded from all counts
+      }
+
+      // Sum total size
+      totalSize += item.size || 0;
+    }
+    
+    // Extract counts with defaults
+    const queued = statusCounts.get('queued') || 0;
+    const inProgress = statusCounts.get('uploading') || 0;
+    const failed = statusCounts.get('failed') || 0;
+    const completed = statusCounts.get('completed') || 0;
+    const deleteOps = operationTypeCounts.get('delete') || 0;
+    const deleteInProgress = statusCounts.get('deleting') || 0;
+    
+    // Only return recent items for UI display (last 50 items for better performance)
+    const recentItems = this.queue
+      .slice(-50)
+      .map(item => ({
+        id: item.id,
+        relativePath: item.relativePath,
+        status: item.status,
+        progress: item.progress,
+        s3Key: item.s3Key,
+        error: item.error,
+        name: item.name,
+        operationType: item.operationType || 'upload'
+      }));
+    
+    // Get recent delete operations (last 10 for performance)
+    const recentDeleteOperations = this.queue
+      .filter(q => q.operationType === 'delete')
+      .slice(-10)
+      .map(item => ({
+        id: item.id,
+        status: item.status,
+        progress: item.progress,
+        completedFiles: item.completedFiles,
+        totalFiles: item.totalFiles,
+        error: item.error
+      }));
+    
+    return {
+      isRunning: inProgress > 0,
+      activeCount: inProgress,
+      total: this.queue.length,
+      queued,
+      inProgress,
+      failed,
+      completed,
+      // Upload-only breakdown - use stable total during active sessions
+      uploadTotal: this._uploadSessionActive ? this._currentSessionTotal : uploadTotal,
+      uploadQueued,
+      uploadInProgress,
+      uploadFailed,
+      uploadCompleted,
+      items: recentItems,
+      deleteOperations: recentDeleteOperations,
+      deleteOperationsCount: deleteOps,
+      deleteInProgress,
+      totalSize,
+      percentage: this.queue.length > 0 ? Math.round((completed / this.queue.length) * 100) : 0
+    };
+  }
+
+  // Simple cleanup - only run when no uploads are active
+  _cleanupCompletedItems() {
+    if (this._uploadSessionActive) return; // Don't cleanup during active uploads
+    
+    const maxQueueSize = 10000;
+    if (this.queue.length > maxQueueSize) {
+      // Remove oldest completed items only
+      const completedItems = this.queue.filter(item => item.status === 'completed');
+      if (completedItems.length > 0) {
+        completedItems.sort((a, b) => a.id.localeCompare(b.id));
+        const toRemove = completedItems.slice(0, Math.min(completedItems.length, this.queue.length - maxQueueSize));
+        this.queue = this.queue.filter(item => !toRemove.includes(item));
+      }
+    }
+  }
+
+  // Manual cleanup - call this when uploads are complete or cancelled
+  cleanupCompletedItems() {
+    this._cleanupCompletedItems();
+  }
+
+  // Simple upload session control
+  startUploadSession(totalFiles) { 
+    this._uploadSessionActive = true; 
+    this._currentSessionTotal = totalFiles; // Set stable total at start
+  }
+  endUploadSession() { 
+    this._uploadSessionActive = false; 
+    this._currentSessionTotal = 0; // Reset stable total
+    this._cleanupCompletedItems(); // Cleanup after upload ends
+  }
+
+  // External linkage: allow UI-managed uploads to surface progress in the global queue
+  addPlaceholder(name, relativePath = '') {
+    const id = `ext_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const item = { id, file: null, relativePath, status: 'queued', progress: 0, s3Key: '', error: undefined, name, operationType: 'upload' };
+    this.queue.push(item);
+    this._emitThrottled();
+    return id;
+  }
+
+  // Batch placeholder creation - simple and stable
+  addPlaceholdersBatch(files) {
+    const allPlaceholderIds = [];
+    const timestamp = Date.now();
+    
+    // Create all placeholders at once - no batching complexity
+    const items = files.map((file, index) => {
+      const id = `ext_${timestamp}_${index}_${Math.random().toString(16).slice(2)}`;
+      return { 
+        id, 
+        file: null,
+        relativePath: file.relativePath || '', 
+        status: 'queued', 
+        progress: 0, 
+        s3Key: '', 
+        error: undefined, 
+        name: file.name,
+        size: file.size || 0,
+        operationType: 'upload'
+      };
+    });
+    
+    this.queue.push(...items);
+    allPlaceholderIds.push(...items.map(item => item.id));
+    
+    this._emitThrottled();
+    return allPlaceholderIds;
+  }
+
+  // Delete operations
+  addDeleteOperation(fileIds, operationType = 'delete') {
+    const id = `del_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const item = { 
+      id, 
+      file: null, 
+      relativePath: '', 
+      status: 'queued', 
+      progress: 0, 
+      s3Key: '', 
+      error: undefined, 
+      name: `${operationType} operation`,
+      operationType,
+      fileIds,
+      totalFiles: fileIds.length,
+      completedFiles: 0
+    };
+    this.queue.push(item);
+    this._emitThrottled();
+    return id;
+  }
+
+  updatePlaceholder(id, { status, progress, error }) {
+    const item = this.queue.find(q => q.id === id);
+    if (!item) {
+      console.log(`Placeholder ${id} not found in queue`);
+      return;
+    }
+    // Update placeholder status and progress
+    if (typeof status === 'string') item.status = status;
+    if (typeof progress === 'number') item.progress = progress;
+    if (error !== undefined) item.error = error;
+    
+    // Don't clean up during active uploads - let Web Worker finish all updates first
+    // Cleanup will happen when upload is complete or cancelled
+    
+    // Use immediate emit for status changes to ensure UI updates
+    this._emit();
+  }
+
+  updateDeleteOperation(id, { status, progress, completedFiles, error }) {
+    const item = this.queue.find(q => q.id === id);
+    if (!item) {
+      return;
+    }
+    if (typeof status === 'string') item.status = status;
+    if (typeof progress === 'number') item.progress = progress;
+    if (typeof completedFiles === 'number') item.completedFiles = completedFiles;
+    if (error !== undefined) item.error = error;
+    
+    // Don't clean up during active operations - let operations finish first
+    
+    // Use immediate emit for status changes to ensure UI updates
+    this._emit();
+  }
+
+  async addFile(file, { relativePath = '' } = {}) {
+    await this.init();
+    const id = Date.now() + Math.random();
+    const item = { id, file, relativePath, status: 'queued', progress: 0, s3Key: '' };
+    this.queue.push(item);
+    await indexedDBService.storeUploadQueueItem({ id, relativePath, status: 'queued', progress: 0 });
+    this._emit();
+    if (this.isRunning) this._tick();
+    return id;
+  }
+
+  start() {
+    this.isRunning = true;
+    this._emit();
+    this._tick();
+  }
+
+  pause() {
+    this.isRunning = false;
+    this._emit();
+  }
+
+  async cancel(id) {
+    await this.init();
+    this.queue = this.queue.filter((q) => q.id !== id);
+    await indexedDBService.removeQueuedUpload(id);
+    this._emit();
+  }
+
+  // clearStalledUploads removed per product decision; rely on Cancel/auto-clear on completion
+
+  // Clear all uploads (for debugging/reset)
+  async clearAll() {
+    await this.init();
+    this.queue = [];
+    await indexedDBService.clearUploadQueue();
+    this._emit();
+  }
+
+  // Register a Web Worker for cancellation tracking
+  registerWorker(worker) {
+    this.activeWorkers.add(worker);
+  }
+
+  // Unregister a Web Worker
+  unregisterWorker(worker) {
+    this.activeWorkers.delete(worker);
+  }
+
+  // Cancel all active uploads
+  async cancelAllUploads() {
+    await this.init();
+    
+    // Mark all upload items as cancelled
+    this.queue.forEach(item => {
+      if (item.operationType === 'upload' && (item.status === 'queued' || item.status === 'uploading')) {
+        item.status = 'cancelled';
+        item.progress = 0;
+        item.error = 'Upload cancelled';
+      }
+    });
+    
+    // Clear upload state
+    this.activeCount = 0;
+    this.isRunning = false;
+    
+    // Terminate all active Web Workers
+    this.activeWorkers.forEach(worker => {
+      try {
+        worker.postMessage({ type: 'cancel' });
+        setTimeout(() => {
+          worker.terminate();
+        }, 100);
+      } catch (error) {
+        console.warn('Error cancelling worker:', error);
+      }
+    });
+    this.activeWorkers.clear();
+    
+    // Persist changes
+    await indexedDBService.clearUploadQueue();
+    
+    // Emit state change
+    this._emit();
+    
+    // Dispatch global cancel event for any active Web Workers
+    window.dispatchEvent(new CustomEvent('cancelAllUploads'));
+    
+    // Also dispatch the legacy cancelUpload event for backward compatibility
+    window.dispatchEvent(new CustomEvent('cancelUpload'));
+  }
+
+  async _tick() {
+    if (!this.isRunning) return;
+    while (this.activeCount < this.concurrent) {
+      const next = this.queue.find((q) => q.status === 'queued');
+      if (!next) break;
+      this._upload(next).catch(() => {});
+    }
+  }
+
+  async _upload(item) {
+    this.activeCount += 1;
+    item.status = 'uploading';
+    item.progress = 0;
+    await this._persistItem(item);
+    this._emit();
+
+    try {
+      // Get presigned URL and final key from backend
+      const presigned = await uppyAPI.getPresignedUrl({
+        filename: item.file.name,
+        fileType: item.file.type || 'application/octet-stream',
+        fileSize: item.file.size || 0,
+        relativePath: item.relativePath || '',
+      });
+
+      const { url, fields } = presigned.presignedUrl || {};
+      const s3Key = presigned.s3Key;
+
+      // Upload via presigned POST
+      const formData = new FormData();
+      Object.entries(fields || {}).forEach(([k, v]) => formData.append(k, v));
+      formData.append('file', item.file);
+
+      await this._xhrPost(url, formData, (pct) => {
+        item.progress = pct;
+        this._emitThrottled();
+      });
+
+      // Notify backend upload complete
+      await uppyAPI.markUploadComplete({ fileId: presigned.fileId, s3Key, etag: '' });
+
+      item.status = 'completed';
+      item.progress = 100;
+      item.s3Key = s3Key;
+      await this._persistItem(item);
+      this._emit();
+    } catch (e) {
+      item.status = 'failed';
+      item.error = e?.message || String(e);
+      await this._persistItem(item);
+      this._emit();
+    } finally {
+      this.activeCount -= 1;
+      // Auto-remove completed from queue after short delay
+      if (item.status === 'completed') {
+        await indexedDBService.removeQueuedUpload(item.id);
+        this.queue = this.queue.filter((q) => q.id !== item.id);
+        this._emit();
+      }
+      if (this.isRunning) this._tick();
+    }
+  }
+
+  _xhrPost(url, formData, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', url, true);
+      xhr.upload.onprogress = (e) => {
+        if (!e.lengthComputable) return;
+        const pct = Math.round((e.loaded / e.total) * 100);
+        try { onProgress?.(pct); } catch {}
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) resolve();
+        else reject(new Error(`Upload failed with status ${xhr.status}`));
+      };
+      xhr.onerror = () => reject(new Error('Network error during upload'));
+      xhr.send(formData);
+    });
+  }
+
+  async _persistItem(item) {
+    // Upsert simplified record into uploads store
+    await indexedDBService.storeUploadQueueItem({
+      id: item.id,
+      relativePath: item.relativePath,
+      status: item.status,
+      progress: item.progress,
+      s3Key: item.s3Key || '',
+    });
+  }
+
+  _emit() {
+    const state = this.getState();
+    this.subscribers.forEach((fn) => {
+      try { fn(state); } catch {}
+    });
+  }
+
+  _emitThrottled() {
+    if (this._throttleTimer) return;
+    this._throttleTimer = setTimeout(() => {
+      this._throttleTimer = null;
+      this._emit();
+    }, 200); // Increased to 200ms to reduce screen refresh frequency
+  }
+}
+
+const uploadManager = new UploadManager();
+export default uploadManager;
+
+
+
