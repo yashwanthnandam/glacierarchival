@@ -1,4 +1,5 @@
 import { Alert, CircularProgress, Box, Typography, Button } from '../utils/muiImports';
+import { STORAGE_KEYS } from '../constants';
 
 /**
  * Common error handling utilities for React components
@@ -101,7 +102,9 @@ export const handleApiError = (error, customHandlers = {}) => {
     switch (status) {
       case 401:
         // Handle unauthorized - redirect to login
-        localStorage.removeItem('token');
+        localStorage.removeItem(STORAGE_KEYS.TOKEN);
+        localStorage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
+        localStorage.removeItem(STORAGE_KEYS.USER);
         window.location.href = '/login';
         break;
       case 402:

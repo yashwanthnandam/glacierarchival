@@ -15,6 +15,7 @@ import {
   Tab,
   LinearProgress
 } from '../utils/muiImports';
+import { STORAGE_KEYS } from '../constants';
 import {
   Storage,
   CloudUpload,
@@ -70,12 +71,15 @@ const ModernDashboard = () => {
   // Handle logout
   const handleLogout = async () => {
     try {
-      localStorage.removeItem('token');
-      localStorage.removeItem('refresh_token');
-      localStorage.removeItem('user_id');
+      localStorage.removeItem(STORAGE_KEYS.TOKEN);
+      localStorage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
+      localStorage.removeItem(STORAGE_KEYS.USER);
       window.location.href = '/login';
     } catch (error) {
-      console.error('Error during logout:', error);
+      // Only log errors in development
+      if (import.meta.env.VITE_DEBUG === 'true') {
+        console.error('Error during logout:', error);
+      }
       window.location.href = '/login';
     }
   };

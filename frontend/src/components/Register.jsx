@@ -11,12 +11,60 @@ import {
 } from '@mui/material';
 import { Link as RouterLink, useNavigate } from 'react-router-dom';
 import { authAPI } from '../services/api';
+import { VALIDATION } from '../constants';
 
 const Register = () => {
   const [formData, setFormData] = useState({ username: '', email: '', password: '' });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+
+  const validateForm = () => {
+    const errors = {};
+    
+    // Username validation
+    if (!formData.username.trim()) {
+      errors.username = 'Username is required';
+    } else if (formData.username.length < VALIDATION.USERNAME_MIN_LENGTH) {
+      errors.username = `Username must be at least ${VALIDATION.USERNAME_MIN_LENGTH} characters`;
+    } else if (formData.username.length > VALIDATION.USERNAME_MAX_LENGTH) {
+      errors.username = `Username must be less than ${VALIDATION.USERNAME_MAX_LENGTH} characters`;
+    }
+    
+    // Email validation
+    if (!formData.email.trim()) {
+      errors.email = 'Email is required';
+    } else if (!VALIDATION.EMAIL_REGEX.test(formData.email)) {
+      errors.email = 'Please enter a valid email address';
+    }
+    
+    // Password validation
+    if (!formData.password) {
+      errors.password = 'Password is required';
+    } else if (formData.password.length < VALIDATION.PASSWORD_MIN_LENGTH) {
+      errors.password = `Password must be at least ${VALIDATION.PASSWORD_MIN_LENGTH} characters`;
+    } else if (formData.password.length > VALIDATION.PASSWORD_MAX_LENGTH) {
+      errors.password = `Password must be less than ${VALIDATION.PASSWORD_MAX_LENGTH} characters`;
+    }
+    
+    return errors;
+  };
+
+  const getErrorMessage = (error) => {
+    if (error.response?.status === 400) {
+      return error.response.data?.error || 'Invalid registration data. Please check your input.';
+    }
+    if (error.response?.status === 409) {
+      return 'Username or email already exists. Please choose different credentials.';
+    }
+    if (error.response?.status >= 500) {
+      return 'Server error. Please try again later.';
+    }
+    if (error.code === 'NETWORK_ERROR' || !error.response) {
+      return 'Network error. Please check your connection.';
+    }
+    return 'Registration failed. Please try again.';
+  };
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -26,6 +74,14 @@ const Register = () => {
     e.preventDefault();
     setLoading(true);
     setError('');
+    
+    // Validate form
+    const validationErrors = validateForm();
+    if (Object.keys(validationErrors).length > 0) {
+      setError(Object.values(validationErrors)[0]);
+      setLoading(false);
+      return;
+    }
     
     try {
       const response = await authAPI.register(formData);
@@ -39,8 +95,13 @@ const Register = () => {
         navigate('/login');
       }
     } catch (err) {
-      setError(err.response?.data?.error || 'Registration failed. Please try again.');
-      console.error('Registration error:', err);
+      const errorMessage = getErrorMessage(err);
+      setError(errorMessage);
+      
+      // Only log errors in development
+      if (import.meta.env.VITE_DEBUG === 'true') {
+        console.error('Registration error:', err);
+      }
     } finally {
       setLoading(false);
     }
