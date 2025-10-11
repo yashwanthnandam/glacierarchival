@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { API_CONFIG } from '../constants';
+import { API_CONFIG, STORAGE_KEYS } from '../constants';
 import secureTokenStorage from '../utils/secureTokenStorage';
 
 const api = axios.create(API_CONFIG);
@@ -109,10 +109,8 @@ export const mediaAPI = {
     // Add auth interceptor
     bulkDeleteApi.interceptors.request.use(
       config => {
-        const token = localStorage.getItem(STORAGE_KEYS.TOKEN);
-        if (token) {
-          config.headers['Authorization'] = `Bearer ${token}`;
-        }
+        const authHeaders = secureTokenStorage.getAuthHeaders();
+        Object.assign(config.headers, authHeaders);
         return config;
       },
       error => Promise.reject(error)
