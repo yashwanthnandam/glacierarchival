@@ -5,15 +5,6 @@ import { FILE_UPLOAD, MESSAGES } from '../constants';
  * Handles all edge cases for file uploads
  */
 
-// Allowed file types from backend settings
-const ALLOWED_FILE_TYPES = [
-  'image/jpeg', 'image/png', 'image/gif', 'image/webp',
-  'video/mp4', 'video/avi', 'video/mov', 'video/wmv',
-  'audio/mp3', 'audio/wav', 'audio/flac',
-  'application/pdf', 'text/plain', 'text/csv',
-  'application/zip', 'application/x-rar-compressed'
-];
-
 /**
  * Format bytes to human readable format
  */
@@ -41,32 +32,12 @@ export const validateFile = (file) => {
     });
   }
 
-  // Check file type
-  if (file.type && !ALLOWED_FILE_TYPES.includes(file.type)) {
-    errors.push({
-      type: 'INVALID_FILE_TYPE',
-      message: MESSAGES.INVALID_FILE_TYPE,
-      details: `File "${file.name}" has type "${file.type}" which is not allowed`
-    });
-  }
-
   // Check filename length
   if (file.name.length > 255) {
     errors.push({
       type: 'FILENAME_TOO_LONG',
       message: 'Filename too long',
       details: `File "${file.name}" has ${file.name.length} characters, maximum allowed is 255`
-    });
-  }
-
-  // Check for dangerous file extensions
-  const dangerousExtensions = ['.exe', '.bat', '.cmd', '.scr', '.pif', '.com', '.vbs', '.js', '.jar'];
-  const fileExt = file.name.toLowerCase().substring(file.name.lastIndexOf('.'));
-  if (dangerousExtensions.includes(fileExt)) {
-    errors.push({
-      type: 'DANGEROUS_FILE',
-      message: 'Dangerous file type detected',
-      details: `File "${file.name}" has extension "${fileExt}" which is not allowed for security reasons`
     });
   }
 

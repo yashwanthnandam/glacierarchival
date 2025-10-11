@@ -1363,6 +1363,75 @@ class UserHibernationPlanViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    @action(detail=False, methods=['get'])
+    def usage_stats(self, request):
+        """Get user's usage statistics"""
+        try:
+            # Get user's current plan or free tier stats
+            user_plan = UserHibernationPlan.objects.filter(
+                user=request.user, 
+                is_active=True
+            ).first()
+            
+            if not user_plan:
+                # Return free tier usage stats
+                total_storage_bytes = MediaFile.objects.filter(
+                    user=request.user, 
+                    is_deleted=False
+                ).aggregate(total=Sum('file_size'))['total'] or 0
+                
+                free_tier_limit_bytes = 15 * 1024 * 1024 * 1024  # 15GB
+                free_tier_used_gb = total_storage_bytes / (1024**3)
+                free_tier_limit_gb = free_tier_limit_bytes / (1024**3)
+                free_tier_used_percentage = (total_storage_bytes / free_tier_limit_bytes) * 100
+                
+                return Response({
+                    'is_free_tier': True,
+                    'storage_used_bytes': total_storage_bytes,
+                    'storage_used_gb': round(free_tier_used_gb, 2),
+                    'storage_limit_bytes': free_tier_limit_bytes,
+                    'storage_limit_gb': free_tier_limit_gb,
+                    'storage_used_percentage': round(free_tier_used_percentage, 1),
+                    'retrieval_used_gb': 0,
+                    'retrieval_remaining_gb': 0,
+                    'retrieval_limit_gb': 0,
+                    'plan_expires_at': None,
+                    'is_expired': False
+                })
+            
+            # Calculate usage stats for paid plan
+            total_storage_bytes = MediaFile.objects.filter(
+                user=request.user, 
+                is_deleted=False
+            ).aggregate(total=Sum('file_size'))['total'] or 0
+            
+            # Get retrieval usage from archive jobs
+            retrieval_bytes = ArchiveJob.objects.filter(
+                user=request.user,
+                status='completed',
+                job_type='restore'
+            ).aggregate(total=Sum('file_size'))['total'] or 0
+            
+            storage_used_gb = total_storage_bytes / (1024**3)
+            retrieval_used_gb = retrieval_bytes / (1024**3)
+            
+            return Response({
+                'is_free_tier': False,
+                'storage_used_bytes': total_storage_bytes,
+                'storage_used_gb': round(storage_used_gb, 2),
+                'storage_limit_bytes': user_plan.plan.storage_limit_bytes,
+                'storage_limit_gb': user_plan.plan.storage_limit_gb,
+                'storage_used_percentage': round((total_storage_bytes / user_plan.plan.storage_limit_bytes) * 100, 1),
+                'retrieval_used_gb': round(retrieval_used_gb, 2),
+                'retrieval_remaining_gb': round(user_plan.plan.retrieval_limit_gb - retrieval_used_gb, 2),
+                'retrieval_limit_gb': user_plan.plan.retrieval_limit_gb,
+                'plan_expires_at': user_plan.expires_at,
+                'is_expired': user_plan.is_expired
+            })
+            
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
     @action(detail=False, methods=['post'])
     def subscribe(self, request):
         """Subscribe to a hibernation plan"""

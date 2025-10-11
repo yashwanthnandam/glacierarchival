@@ -90,23 +90,6 @@ class RateLimitError(UploadError):
             status_code=429
         )
 
-class FileTypeError(UploadError):
-    """File type validation errors"""
-    def __init__(self, file_type, allowed_types, filename=None):
-        self.file_type = file_type
-        self.allowed_types = allowed_types
-        self.filename = filename
-        super().__init__(
-            message=f"File type '{file_type}' is not allowed",
-            error_type="INVALID_FILE_TYPE",
-            details={
-                "file_type": file_type,
-                "allowed_types": allowed_types,
-                "filename": filename
-            },
-            status_code=400
-        )
-
 class SessionSizeError(UploadError):
     """Upload session size errors"""
     def __init__(self, session_size, max_session_size):
@@ -165,13 +148,6 @@ def validate_file_size(file_size, filename=None):
     max_size = getattr(settings, 'MAX_FILE_SIZE', 5 * 1024 * 1024 * 1024)
     if file_size > max_size:
         raise FileSizeError(file_size, max_size, filename)
-    return True
-
-def validate_file_type(file_type, filename=None):
-    """Validate file type against allowed types"""
-    allowed_types = getattr(settings, 'ALLOWED_FILE_TYPES', [])
-    if allowed_types and file_type not in allowed_types:
-        raise FileTypeError(file_type, allowed_types, filename)
     return True
 
 def validate_storage_limit(current_usage, additional_size=0):

@@ -13,6 +13,13 @@ from .views import (
     resend_verification, 
     get_user
 )
+from .secure_auth import (
+    secure_login,
+    secure_refresh,
+    secure_logout,
+    secure_user_info,
+    secure_register
+)
 
 router = DefaultRouter()
 router.register(r'media-files', MediaFileViewSet, basename='mediafile')
@@ -24,10 +31,19 @@ router.register(r'payments', PaymentViewSet, basename='payment')
 
 urlpatterns = [
     path('', include(router.urls)),
+    
+    # Legacy authentication endpoints (for backward compatibility)
     path('auth/register/', register_user, name='register'),
     path('auth/login/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('auth/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('auth/user/', get_user, name='get_user'),
     path('auth/verify-email/', verify_email, name='verify_email'),
     path('auth/resend-verification/', resend_verification, name='resend_verification'),
+    
+    # Secure cookie-based authentication endpoints
+    path('auth/secure/login/', secure_login, name='secure_login'),
+    path('auth/secure/refresh/', secure_refresh, name='secure_refresh'),
+    path('auth/secure/logout/', secure_logout, name='secure_logout'),
+    path('auth/secure/user/', secure_user_info, name='secure_user_info'),
+    path('auth/secure/register/', secure_register, name='secure_register'),
 ]

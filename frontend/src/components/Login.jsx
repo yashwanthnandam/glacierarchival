@@ -11,7 +11,8 @@ import {
 } from '@mui/material';
 import { useNavigate, Link as RouterLink } from 'react-router-dom';
 import { authAPI } from '../services/api';
-import { STORAGE_KEYS, VALIDATION, TOKEN_UTILS } from '../constants';
+import { VALIDATION, STORAGE_KEYS } from '../constants';
+import secureTokenStorage from '../utils/secureTokenStorage';
 
 const Login = () => {
   const [username, setUsername] = useState('');
@@ -70,18 +71,31 @@ const Login = () => {
     }
     
     try {
-      const response = await authAPI.login({ username, password });
-      const { access, refresh } = response.data;
+      // Use secure authentication if available, fallback to legacy
+      const useSecureAuth = import.meta.env.VITE_USE_SECURE_AUTH === 'true';
       
-      // Validate tokens before storing
-      if (!TOKEN_UTILS.isValidJWT(access) || !TOKEN_UTILS.isValidJWT(refresh)) {
-        throw new Error('Invalid token received from server');
+      if (useSecureAuth) {
+        const response = await authAPI.secureLogin({ username, password });
+        const { user, csrf_token } = response.data;
+        
+        // Set CSRF token for cookie-based authentication
+        secureTokenStorage.setCSRFToken(csrf_token);
+        
+        // Store user data
+        localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+        
+        navigate('/dashboard');
+      } else {
+        // Legacy localStorage-based authentication
+        const response = await authAPI.login({ username, password });
+        const { access, refresh } = response.data;
+        
+        // Store tokens securely
+        secureTokenStorage.setAccessToken(access);
+        secureTokenStorage.setRefreshToken(refresh);
+        
+        navigate('/dashboard');
       }
-      
-      localStorage.setItem(STORAGE_KEYS.TOKEN, access);
-      localStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, refresh);
-      
-      navigate('/dashboard');
     } catch (err) {
       const errorMessage = getErrorMessage(err);
       setError(errorMessage);

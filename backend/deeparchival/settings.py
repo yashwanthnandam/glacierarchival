@@ -11,7 +11,7 @@ SECRET_KEY = os.getenv('SECRET_KEY')
 if not SECRET_KEY:
     raise ValueError("SECRET_KEY environment variable is required")
 
-# Encryption key for sensitive data
+# Encryption key for sensitive data - MANDATORY
 ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY')
 if not ENCRYPTION_KEY:
     # Generate a new key if not provided (for development only)
@@ -19,6 +19,15 @@ if not ENCRYPTION_KEY:
     ENCRYPTION_KEY = Fernet.generate_key().decode()
     print(f"⚠️  Generated new ENCRYPTION_KEY for development: {ENCRYPTION_KEY}")
     print("⚠️  Please set ENCRYPTION_KEY environment variable in production!")
+    print("⚠️  Example: export ENCRYPTION_KEY='your-secure-key-here'")
+
+# Validate encryption key format - MANDATORY
+try:
+    from cryptography.fernet import Fernet
+    Fernet(ENCRYPTION_KEY.encode())  # Test if key is valid
+    print("✅ Encryption key validated successfully")
+except Exception as e:
+    raise ValueError(f"Invalid ENCRYPTION_KEY format: {str(e)}")
 
 DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
 
@@ -176,7 +185,8 @@ if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'api.cookie_auth.CookieJWTAuthentication',  # Custom cookie-based JWT auth
+        'rest_framework_simplejwt.authentication.JWTAuthentication',  # Fallback to header-based
     ),
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
@@ -228,6 +238,18 @@ SIMPLE_JWT = {
     'SLIDING_TOKEN_REFRESH_LIFETIME': timedelta(days=1),
 }
 
+# Secure Cookie Settings
+COOKIE_SECURE = not DEBUG  # Only secure cookies in production
+COOKIE_HTTPONLY = True     # Always use httpOnly cookies
+COOKIE_SAMESITE = 'Strict' # Strict SameSite policy
+COOKIE_DOMAIN = None       # Set to your domain in production
+
+# CSRF Settings for Cookie-based Authentication
+CSRF_COOKIE_SECURE = COOKIE_SECURE
+CSRF_COOKIE_HTTPONLY = False  # CSRF token needs to be accessible to JavaScript
+CSRF_COOKIE_SAMESITE = COOKIE_SAMESITE
+CSRF_TRUSTED_ORIGINS = os.getenv('CSRF_TRUSTED_ORIGINS', 'http://localhost:5173').split(',')
+
 # AWS S3 Configuration
 AWS_STORAGE_BUCKET_NAME = os.getenv('AWS_STORAGE_BUCKET_NAME')
 AWS_S3_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
@@ -263,13 +285,6 @@ FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10MB
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10MB
 FILE_UPLOAD_PERMISSIONS = 0o644
-ALLOWED_FILE_TYPES = [
-    'image/jpeg', 'image/png', 'image/gif', 'image/webp',
-    'video/mp4', 'video/avi', 'video/mov', 'video/wmv',
-    'audio/mp3', 'audio/wav', 'audio/flac',
-    'application/pdf', 'text/plain', 'text/csv',
-    'application/zip', 'application/x-rar-compressed'
-]
 MAX_FILE_SIZE = 5 * 1024 * 1024 * 1024  # 5GB max file size
 MAX_FILES_PER_UPLOAD = 1000  # Max files per upload session
 MAX_CONCURRENT_UPLOADS = 3  # Max concurrent uploads per user

@@ -21,10 +21,14 @@ A comprehensive cloud storage platform with intelligent hibernation capabilities
 - **Responsive Design**: Modern UI that works on all devices
 
 ### Security Features
+- **🔐 MANDATORY ENCRYPTION**: All sensitive data (AWS credentials) is encrypted using Fernet encryption
+- **🛡️ httpOnly Cookies**: Secure token storage prevents XSS attacks
+- **🔒 CSRF Protection**: Built-in CSRF protection for all state-changing operations
+- **🚫 No Encryption Bypass**: Users cannot disable encryption - it's enforced at the application level
 - **File Type Validation**: Only allow safe file types
 - **Path Traversal Protection**: Prevent directory traversal attacks
 - **Rate Limiting**: Prevent abuse and DoS attacks
-- **Authentication**: Secure JWT-based authentication
+- **Authentication**: Secure JWT-based authentication with httpOnly cookies
 - **CORS Protection**: Proper cross-origin resource sharing
 
 ## 🚀 Quick Start

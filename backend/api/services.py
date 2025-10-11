@@ -20,8 +20,8 @@ from .utils import calculate_file_checksum, sanitize_filename
 from .base_service import BaseService
 from .error_handling import APIError
 from .upload_error_handling import (
-    FileSizeError, StorageLimitError, FileTypeError, SessionSizeError,
-    FileCountError, validate_file_size, validate_file_type, validate_storage_limit,
+    FileSizeError, StorageLimitError, SessionSizeError,
+    FileCountError, validate_file_size, validate_storage_limit,
     validate_session_size, validate_file_count, handle_upload_error
 )
 
@@ -645,12 +645,6 @@ class MediaFileService(BaseService):
         except FileSizeError as e:
             raise e
         
-        # Security: File type validation using new error handling
-        if hasattr(file, 'content_type'):
-            try:
-                validate_file_type(file.content_type, file.name)
-            except FileTypeError as e:
-                raise e
         
         # Security: Filename validation (prevent path traversal)
         import os
@@ -661,12 +655,6 @@ class MediaFileService(BaseService):
         # Security: Filename length validation
         if len(filename) > 255:
             raise ValueError("Filename too long (max 255 characters)")
-        
-        # Security: Check for dangerous file extensions
-        dangerous_extensions = ['.exe', '.bat', '.cmd', '.scr', '.pif', '.com', '.vbs', '.js', '.jar']
-        file_ext = os.path.splitext(filename)[1].lower()
-        if file_ext in dangerous_extensions:
-            raise ValueError(f"File extension '{file_ext}' is not allowed for security reasons")
     
     def _calculate_checksum(self, file):
         """Calculate file checksum for integrity"""
