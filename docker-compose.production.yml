@@ -1,0 +1,85 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: datahibernate_prod
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: secure_password_123
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.production
+    ports:
+      - "8081:8000" # Expose backend on host port 8081
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      - SECRET_KEY=${SECRET_KEY}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - DEBUG=False
+      - ALLOWED_HOSTS=datahibernate.in,www.datahibernate.in,localhost,127.0.0.1
+      - CSRF_TRUSTED_ORIGINS=https://datahibernate.in,https://www.datahibernate.in
+      - DB_HOST=postgres
+      - DB_NAME=datahibernate_prod
+      - DB_USER=postgres
+      - DB_PASSWORD=secure_password_123
+      - DB_PORT=5432
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_STORAGE_BUCKET_NAME=glacier-archival-bucket
+      - AWS_S3_REGION_NAME=ap-south-1
+      - REDIS_URL=redis://redis:6379/0
+      - EMAIL_HOST=smtpout.secureserver.net
+      - EMAIL_PORT=587
+      - EMAIL_USE_TLS=true
+      - EMAIL_USE_SSL=false
+      - EMAIL_HOST_USER=yashwanth@datahibernate.in
+      - EMAIL_HOST_PASSWORD=${EMAIL_HOST_PASSWORD}
+      - DEFAULT_FROM_EMAIL=DataHibernate <yashwanth@datahibernate.in>
+      - FRONTEND_URL=https://datahibernate.in
+    volumes:
+      - static_files:/app/staticfiles
+      - media_files:/app/media
+    restart: unless-stopped
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py collectstatic --noinput &&
+             python manage.py populate_hibernation_plans &&
+             gunicorn deeparchival.wsgi:application --bind 0.0.0.0:8000 --workers 2"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.production
+      args:
+        VITE_API_BASE_URL: https://datahibernate.in/api/
+        VITE_USE_SECURE_AUTH: "false"
+    ports:
+      - "8080:80" # Expose frontend on host port 8080
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  static_files:
+  media_files:
