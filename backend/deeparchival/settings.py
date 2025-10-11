@@ -11,6 +11,15 @@ SECRET_KEY = os.getenv('SECRET_KEY')
 if not SECRET_KEY:
     raise ValueError("SECRET_KEY environment variable is required")
 
+# Encryption key for sensitive data
+ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY')
+if not ENCRYPTION_KEY:
+    # Generate a new key if not provided (for development only)
+    from cryptography.fernet import Fernet
+    ENCRYPTION_KEY = Fernet.generate_key().decode()
+    print(f"⚠️  Generated new ENCRYPTION_KEY for development: {ENCRYPTION_KEY}")
+    print("⚠️  Please set ENCRYPTION_KEY environment variable in production!")
+
 DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
 
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')

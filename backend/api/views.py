@@ -124,11 +124,10 @@ class MediaFileViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return MediaFile.objects.filter(user=self.request.user, is_deleted=False)
 
-    @action(detail=False, methods=['get'], permission_classes=[])
+    @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
     def list_optimized(self, request):
         """Optimized file listing with caching and pagination"""
-        # Temporary: Use a default user for testing
-        user_id = getattr(request.user, 'id', 1) if hasattr(request.user, 'id') and request.user.id else 1
+        user_id = request.user.id
         folder_path = request.query_params.get('folder', '')
         page = int(request.query_params.get('page', 1))
         page_size = int(request.query_params.get('page_size', 50))
@@ -196,11 +195,10 @@ class MediaFileViewSet(viewsets.ModelViewSet):
         
         return Response(result)
 
-    @action(detail=False, methods=['get'], permission_classes=[])
+    @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
     def folder_structure(self, request):
         """Get folder structure without loading all files"""
-        # Temporary: Use a default user for testing
-        user_id = getattr(request.user, 'id', 1) if hasattr(request.user, 'id') and request.user.id else 1
+        user_id = request.user.id
         cache_key = f"folder_structure_{user_id}"
         
         # Try cache first
@@ -1425,3 +1423,5 @@ class UserHibernationPlanViewSet(viewsets.ModelViewSet):
             
             return Response({'message': 'Subscription cancelled successfully'})
             
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -4,6 +4,8 @@ from django.utils import timezone
 from django.utils.crypto import get_random_string
 from datetime import timedelta
 import uuid
+from django.conf import settings
+from cryptography.fernet import Fernet
 from .constants import (
     MEDIA_FILE_STATUS_CHOICES, ARCHIVE_JOB_TYPE_CHOICES,
     EMAIL_VERIFICATION_EXPIRY_HOURS
@@ -13,7 +15,7 @@ class S3Config(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='s3_config')
     bucket_name = models.CharField(max_length=255, db_index=True)
     aws_access_key = models.CharField(max_length=255)
-    aws_secret_key = models.CharField(max_length=255)
+    aws_secret_key_encrypted = models.TextField(blank=True, null=True)  # Store encrypted secret key
     region = models.CharField(max_length=50, default='us-east-1')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -25,8 +27,37 @@ class S3Config(models.Model):
     def __str__(self):
         return f"{self.user.username} - {self.bucket_name}"
 
+    def set_secret_key(self, secret_key):
+        """Encrypt and store the AWS secret key"""
+        if not secret_key:
+            return
+        try:
+            f = Fernet(settings.ENCRYPTION_KEY.encode())
+            self.aws_secret_key_encrypted = f.encrypt(secret_key.encode()).decode()
+        except Exception as e:
+            raise ValueError(f"Failed to encrypt secret key: {str(e)}")
+
+    def get_secret_key(self):
+        """Decrypt and return the AWS secret key"""
+        if not self.aws_secret_key_encrypted:
+            return None
+        try:
+            f = Fernet(settings.ENCRYPTION_KEY.encode())
+            return f.decrypt(self.aws_secret_key_encrypted.encode()).decode()
+        except Exception as e:
+            raise ValueError(f"Failed to decrypt secret key: {str(e)}")
+
+    @property
+    def aws_secret_key(self):
+        """Property to maintain backward compatibility"""
+        return self.get_secret_key()
+
+    @aws_secret_key.setter
+    def aws_secret_key(self, value):
+        """Property setter to maintain backward compatibility"""
+        self.set_secret_key(value)
+
     def save(self, *args, **kwargs):
-        # Encrypt sensitive data in production
         super().save(*args, **kwargs)
 
 
