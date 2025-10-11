@@ -34,6 +34,10 @@ class UploadedFile(models.Model):
     s3_key = models.CharField(max_length=1000, blank=True)
     s3_etag = models.CharField(max_length=100, blank=True)
     
+    # Encryption information
+    encryption_metadata = models.JSONField(blank=True, null=True, help_text='Encryption metadata including algorithm, IV, key info')
+    is_encrypted = models.BooleanField(default=False, help_text='Whether the file is encrypted')
+    
     class Meta:
         ordering = ['-uploaded_at']
         indexes = [
@@ -106,7 +110,9 @@ class UploadedFile(models.Model):
             s3_key=self.s3_key,
             status='uploaded',
             uploaded_at=self.uploaded_at,
-            last_accessed=self.last_accessed
+            last_accessed=self.last_accessed,
+            encryption_metadata=self.encryption_metadata,
+            is_encrypted=self.is_encrypted
         )
         
         return media_file

@@ -155,17 +155,17 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_TASK_ACKS_LATE = True
 
 # Celery Beat schedule
-from celery.schedules import crontab
-CELERY_BEAT_SCHEDULE = {
-    'sync-restore-status-every-15-min': {
-        'task': 'api.sync_restore_status',
-        'schedule': crontab(minute='*/15'),
-    },
-    'snapshot-storage-costs-nightly': {
-        'task': 'api.snapshot_storage_costs',
-        'schedule': crontab(hour=2, minute=0),
-    },
-}
+# from celery.schedules import crontab
+# CELERY_BEAT_SCHEDULE = {
+#     'sync-restore-status-every-15-min': {
+#         'task': 'api.sync_restore_status',
+#         'schedule': crontab(minute='*/15'),
+#     },
+#     'snapshot-storage-costs-nightly': {
+#         'task': 'api.snapshot_storage_costs',
+#         'schedule': crontab(hour=2, minute=0),
+#     },
+# }
 
 # Razorpay Configuration
 import os

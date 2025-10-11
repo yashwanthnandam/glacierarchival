@@ -240,8 +240,11 @@ def secure_register(request):
                     'user_id': user.id
                 }, status=status.HTTP_201_CREATED)
             except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to send verification email: {str(e)}")
                 return Response({
-                    'error': 'Registration successful but failed to send verification email. Please contact support.'
+                    'error': f'Registration successful but failed to send verification email: {str(e)}. Please contact support.'
                 }, status=status.HTTP_201_CREATED)
         
         # Format validation errors for better frontend handling

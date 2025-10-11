@@ -93,6 +93,7 @@ class S3UploadView(APIView):
             relative_path = request.data.get('relativePath', '')
             parent_directory = request.data.get('parentDirectory', '')
             session_id = request.data.get('sessionId')
+            encryption_metadata = request.data.get('encryptionMetadata', None)
             
             if not file_name:
                 return Response({'error': 'File name is required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -161,7 +162,9 @@ class S3UploadView(APIView):
                 relative_path=sanitized_relpath,
                 parent_directory=parent_directory,
                 s3_key=s3_key,
-                upload_session=upload_session
+                upload_session=upload_session,
+                encryption_metadata=encryption_metadata,
+                is_encrypted=bool(encryption_metadata)
             )
             
             # No caching - each file needs its own UploadedFile record

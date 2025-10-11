@@ -258,6 +258,7 @@ class UserHibernationPlan(models.Model):
     storage_used_bytes = models.BigIntegerField(default=0, help_text='Storage used in bytes')
     retrieval_used_gb = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, help_text='Retrieval used in GB')
     retrieval_period_start = models.DateTimeField(default=timezone.now, help_text='Start of retrieval period')
+    auto_renew = models.BooleanField(default=True, help_text='Whether to automatically renew this subscription')
 
     class Meta:
         verbose_name = "User Hibernation Plan"
