@@ -196,9 +196,22 @@ const ModernDashboard = () => {
       {/* Top App Bar */}
       <AppBar position="static" elevation={1} sx={{ bgcolor: 'white', color: 'text.primary' }}>
         <Toolbar>
-          <Typography variant="h6" component="div" sx={{ fontWeight: 'bold', mr: 4 }}>
-            Data Hibernate
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', mr: 4 }}>
+            <Box
+              component="img"
+              src="/icon.png"
+              alt="DataHibernate Logo"
+              sx={{
+                width: 32,
+                height: 32,
+                mr: 1.5,
+                borderRadius: 1
+              }}
+            />
+            <Typography variant="h6" component="div" sx={{ fontWeight: 'bold' }}>
+              Data Hibernate
+            </Typography>
+          </Box>
 
           {/* Navigation Tabs */}
           <Tabs

@@ -31,11 +31,9 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-    env_file:
-      - .env.production
     environment:
-      - SECRET_KEY=${SECRET_KEY}
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - SECRET_KEY=django-super-secret-key-for-datahibernate-2024-production-CHANGE-THIS
+      - ENCRYPTION_KEY=v5AHHrB_VBMHNeY3tf705yDjYZ9SUVNJ47BdNsyLlxo=
       - DEBUG=False
       - ALLOWED_HOSTS=datahibernate.in,www.datahibernate.in,localhost,127.0.0.1
       - CSRF_TRUSTED_ORIGINS=https://datahibernate.in,https://www.datahibernate.in
@@ -54,7 +52,7 @@ services:
       - EMAIL_USE_TLS=true
       - EMAIL_USE_SSL=false
       - EMAIL_HOST_USER=yashwanth@datahibernate.in
-      - EMAIL_HOST_PASSWORD=${EMAIL_HOST_PASSWORD}
+      - EMAIL_HOST_PASSWORD=Yn1129405+**2
       - DEFAULT_FROM_EMAIL=DataHibernate <yashwanth@datahibernate.in>
       - FRONTEND_URL=https://datahibernate.in
     volumes:
@@ -62,7 +60,8 @@ services:
       - media_files:/app/media
     restart: unless-stopped
     command: >
-      sh -c "python manage.py migrate &&
+      sh -c "python manage.py migrate api 0020_userhibernationplan_auto_renew --fake &&
+             python manage.py migrate &&
              python manage.py collectstatic --noinput &&
              python manage.py populate_hibernation_plans &&
              gunicorn deeparchival.wsgi:application --bind 0.0.0.0:8000 --workers 2"

@@ -112,8 +112,24 @@ const Login = () => {
   return (
     <Card sx={{ maxWidth: 400, mx: 'auto', mt: 4 }}>
       <CardContent>
-        <Typography variant="h5" component="h2" gutterBottom align="center">
-          Login
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 3 }}>
+          <Box
+            component="img"
+            src="/icon.png"
+            alt="DataHibernate Logo"
+            sx={{
+              width: 40,
+              height: 40,
+              mr: 2,
+              borderRadius: 1
+            }}
+          />
+          <Typography variant="h5" component="h2" sx={{ fontWeight: 'bold' }}>
+            Data Hibernate
+          </Typography>
+        </Box>
+        <Typography variant="h6" component="h3" gutterBottom align="center" color="text.secondary">
+          Login to your account
         </Typography>
         
         {error && (

@@ -9,6 +9,7 @@ import ModernDashboard from './components/ModernDashboard';
 import EmailVerification from './components/EmailVerification';
 import UploadPage from './pages/UploadPage';
 import HibernationPlanDashboard from './components/HibernationPlanDashboard';
+import LandingPage from './components/LandingPage';
 import theme from './theme';
 
 const App = () => {
@@ -19,7 +20,7 @@ const App = () => {
         <Box sx={{ minHeight: '100vh' }}>
           <Router>
             <Routes>
-              <Route path="/" element={<Navigate to="/login" replace />} />
+              <Route path="/" element={<LandingPage />} />
               <Route path="/login" element={<Login />} />
               <Route path="/register" element={<Register />} />
               <Route path="/verify-email" element={<EmailVerification />} />
