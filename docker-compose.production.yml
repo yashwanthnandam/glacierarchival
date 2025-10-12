@@ -31,6 +31,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+    env_file:
+      - backend/.env
     environment:
       - SECRET_KEY=django-super-secret-key-for-datahibernate-2024-production-CHANGE-THIS
       - ENCRYPTION_KEY=v5AHHrB_VBMHNeY3tf705yDjYZ9SUVNJ47BdNsyLlxo=
@@ -44,17 +46,17 @@ services:
       - DB_PORT=5432
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - AWS_STORAGE_BUCKET_NAME=glacier-archival-bucket
-      - AWS_S3_REGION_NAME=ap-south-1
+      - AWS_STORAGE_BUCKET_NAME=${AWS_STORAGE_BUCKET_NAME}
+      - AWS_S3_REGION_NAME=${AWS_REGION}
       - REDIS_URL=redis://redis:6379/0
-      - EMAIL_HOST=smtpout.secureserver.net
-      - EMAIL_PORT=587
-      - EMAIL_USE_TLS=true
-      - EMAIL_USE_SSL=false
-      - EMAIL_HOST_USER=yashwanth@datahibernate.in
-      - EMAIL_HOST_PASSWORD=Yn1129405+**2
-      - DEFAULT_FROM_EMAIL=DataHibernate <yashwanth@datahibernate.in>
-      - FRONTEND_URL=https://datahibernate.in
+      - EMAIL_HOST=${EMAIL_HOST}
+      - EMAIL_PORT=${EMAIL_PORT}
+      - EMAIL_USE_TLS=${EMAIL_USE_TLS}
+      - EMAIL_USE_SSL=${EMAIL_USE_SSL}
+      - EMAIL_HOST_USER=${EMAIL_HOST_USER}
+      - EMAIL_HOST_PASSWORD=${EMAIL_HOST_PASSWORD}
+      - DEFAULT_FROM_EMAIL=${DEFAULT_FROM_EMAIL}
+      - FRONTEND_URL=${FRONTEND_URL}
     volumes:
       - static_files:/app/staticfiles
       - media_files:/app/media
