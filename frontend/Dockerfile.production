@@ -1,37 +1,29 @@
-# Stage 1: Build the React app
-FROM node:18-alpine as builder
+# Production Dockerfile for frontend
+FROM node:18-alpine as build
 
 WORKDIR /app
 
-# Copy package files first for better caching
+# Copy package files
 COPY package.json package-lock.json* ./
-
-# Install all dependencies (including dev dependencies for build)
-RUN npm ci
+RUN npm ci --only=production
 
 # Copy source code
 COPY . .
 
-# Pass build arguments to Vite
-ARG VITE_API_BASE_URL
-ARG VITE_USE_SECURE_AUTH
-ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
-ENV VITE_USE_SECURE_AUTH=$VITE_USE_SECURE_AUTH
-
-# Build the app
+# Build the production bundle
 RUN npm run build
 
-# Stage 2: Serve the app with Nginx
-FROM nginx:stable-alpine
+# Production stage with Nginx
+FROM nginx:alpine
 
-# Copy Nginx configuration
+# Copy built files from build stage
+COPY --from=build /app/dist /usr/share/nginx/html
+
+# Copy custom nginx config
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# Copy built React app from builder stage
-COPY --from=builder /app/dist /usr/share/nginx/html
-
-# Expose port
+# Expose port 80
 EXPOSE 80
 
-# Start Nginx
+# Start nginx
 CMD ["nginx", "-g", "daemon off;"]

@@ -13,7 +13,8 @@ from .views import (
     resend_verification, 
     get_user,
     request_password_reset,
-    reset_password
+    reset_password,
+    create_folder
 )
 from .test_sentry import test_sentry
 from .secure_auth import (
@@ -44,6 +45,9 @@ urlpatterns = [
     path('auth/resend-verification/', resend_verification, name='resend_verification'),
     path('auth/request-password-reset/', request_password_reset, name='request_password_reset'),
     path('auth/reset-password/', reset_password, name='reset_password'),
+    
+    # Folder management
+    path('create-folder/', create_folder, name='create_folder'),
     
     # Secure cookie-based authentication endpoints
     path('auth/secure/login/', secure_login, name='secure_login'),

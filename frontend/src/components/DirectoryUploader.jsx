@@ -43,6 +43,7 @@ import {
   getUploadStrategy,
   formatBytes 
 } from '../utils/uploadValidation';
+import { FILE_UPLOAD } from '../constants';
 import encryptionService from '../services/encryptionService';
 import analyticsService from '../services/analyticsService';
 import { captureException, addBreadcrumb } from '../services/sentryService';
@@ -97,6 +98,19 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
     
     const selectedFiles = Array.from(event.target.files);
     if (selectedFiles.length === 0) return;
+
+    // Check file count limit FIRST
+    if (selectedFiles.length > FILE_UPLOAD.MAX_FILES) {
+      setValidationErrors([{
+        type: 'file_count_exceeded',
+        message: `🚫 Too many files selected!`,
+        details: `You selected ${selectedFiles.length.toLocaleString()} files, but the maximum allowed is ${FILE_UPLOAD.MAX_FILES.toLocaleString()} files to prevent browser slowdown.`,
+        solution: '💡 Please split your directory into smaller batches of 100,000 files or less.',
+        icon: '⚠️'
+      }]);
+      setUploadStatus(`❌ Selection cancelled: ${selectedFiles.length.toLocaleString()} files exceeds limit`);
+      return;
+    }
 
     setUploadStatus('Validating files...');
 
@@ -170,6 +184,19 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
     
     const all = Array.from(event.target.files);
     if (all.length === 0) return;
+
+    // Check file count limit FIRST for directories
+    if (all.length > FILE_UPLOAD.MAX_FILES) {
+      setValidationErrors([{
+        type: 'directory_count_exceeded',
+        message: `🚫 Directory too large!`,
+        details: `This directory contains ${all.length.toLocaleString()} files, but the maximum allowed is ${FILE_UPLOAD.MAX_FILES.toLocaleString()} files to prevent browser slowdown.`,
+        solution: '💡 Please split this directory into smaller folders of 100,000 files or less.',
+        icon: '📁'
+      }]);
+      setUploadStatus(`❌ Directory rejected: ${all.length.toLocaleString()} files exceeds limit`);
+      return;
+    }
 
     setUploadStatus('Validating directory...');
 
@@ -1037,7 +1064,10 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
         const batchResults = data?.results || [];
         
         if (type === 'progress') {
-          const progress = (completed / total) * 100;
+          // Prevent division by zero and ensure valid progress
+          const progress = total > 0 ? Math.min(100, Math.max(0, (completed / total) * 100)) : 0;
+          
+          console.log(`Progress update: ${completed}/${total} = ${progress.toFixed(2)}%`);
           setUploadProgress(progress);
           setUploadStatus(`Uploading ${completed}/${total} files... (Web Workers)`);
           
@@ -1443,7 +1473,7 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
               </Typography>
               <LinearProgress 
                 variant="determinate" 
-                value={uploadProgress} 
+                value={isNaN(uploadProgress) ? 0 : uploadProgress} 
                 sx={{ 
                   mb: 2,
                   height: { xs: 8, sm: 6 },
@@ -1465,7 +1495,7 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
                   color="text.secondary"
                   sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' } }}
                 >
-                  {uploadProgress.toFixed(1)}% complete
+                  {isNaN(uploadProgress) ? '0.0' : uploadProgress.toFixed(1)}% complete
                 </Typography>
                 <Typography 
                   variant="body2" 

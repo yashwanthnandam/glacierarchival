@@ -1,6 +1,6 @@
 // Simplified application constants
 export const API_CONFIG = {
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/',
+  baseURL: import.meta.env.VITE_API_BASE_URL || 'https://datahibernate.in/api/',
   timeout: 30000,
   withCredentials: true, // Send cookies with cross-origin requests
 };
@@ -26,7 +26,7 @@ export const ROUTES = {
 export const FILE_UPLOAD = {
   MAX_FILE_SIZE: 5 * 1024 * 1024 * 1024, // 5GB - aligned with backend MAX_FILE_SIZE
   MAX_TOTAL_SIZE: 15 * 1024 * 1024 * 1024, // 15GB - aligned with free tier limit
-  MAX_FILES: 1000000,
+  MAX_FILES: 100000, // 100K files limit - prevents browser slowdown
   MAX_SESSION_SIZE: 50 * 1024 * 1024 * 1024, // 50GB - maximum session size
   CHUNK_SIZE: 8 * 1024 * 1024, // 8MB chunks for large files
   MEMORY_LIMIT: 100 * 1024 * 1024, // 100MB memory limit for processing

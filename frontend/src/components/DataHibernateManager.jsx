@@ -35,7 +35,6 @@ import {
 // Import centralized file state configuration
 import { getFileStateConfig as getCentralizedFileStateConfig } from '../utils/fileStateConfig';
 import encryptionService from '../services/encryptionService';
-import analyticsService from '../services/analyticsService';
 import {
   Folder,
   FolderOpen,
@@ -1170,7 +1169,11 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
   async function loadFiles() {
     try {
       setLoading(true);
-      const response = await mediaAPI.getFiles();
+      const response = await mediaAPI.getFiles({
+        folder: currentFolder === 'root' ? 'root' : currentFolder,
+        search: searchQuery?.trim() || '',
+        paginate: false,
+      });
       const allFiles = response.data || [];
 
       // Group files by folder structure
@@ -1407,12 +1410,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
       sx={{
         display: 'flex',
         flexDirection: { xs: 'column', lg: 'row' },
-        height: { 
-          xs: 'calc(100vh - 120px)', // More space for mobile browser UI
-          sm: 'calc(100vh - 110px)', 
-          lg: 'calc(100vh - 100px)' 
-        },
-        minHeight: { xs: 'calc(100vh - 120px)', sm: 'calc(100vh - 110px)', lg: 'calc(100vh - 100px)' },
+        height: 'calc(100vh - 100px)',
         bgcolor: 'background.default',
         borderRadius: 0,
         overflow: 'hidden',
@@ -1540,23 +1538,8 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
           }}
         >
           {/* Breadcrumb + Actions */}
-          <Box sx={{ 
-            px: { xs: 1, sm: 2 }, 
-            pt: { xs: 1, sm: 1.5 }, 
-            pb: { xs: 0.5, sm: 1 } 
-          }}>
-            <Stack 
-              direction="row" 
-              spacing={{ xs: 0.5, sm: 1 }} 
-              alignItems="center" 
-              justifyContent="space-between" 
-              sx={{ 
-                flexWrap: { xs: 'wrap', sm: 'nowrap' }, 
-                gap: { xs: 0.5, sm: 1 }, 
-                overflowX: 'auto',
-                minHeight: { xs: 'auto', sm: '40px' }
-              }}
-            >
+          <Box sx={{ px: 0, pt: 1.5, pb: 1 }}>
+            <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" sx={{ flexWrap: 'nowrap', gap: 1, overflowX: 'auto' }}>
               <Stack direction="row" spacing={1} alignItems="center" sx={{ flex: '0 0 auto', whiteSpace: 'nowrap' }}>
               <Home
                 fontSize="small"
@@ -1574,11 +1557,10 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
                       <NavigateNext fontSize="small" sx={{ color: 'text.secondary' }} />
                       <Typography
                         variant="body2"
-                        sx={{ 
+              sx={{ 
                           color: index === arr.length - 1 ? 'primary.main' : 'text.secondary',
                           fontWeight: index === arr.length - 1 ? 600 : 400,
                           cursor: 'pointer',
-                          fontSize: { xs: '0.75rem', sm: '0.875rem' },
                             '&:hover': { textDecoration: 'underline' },
                             whiteSpace: 'nowrap'
                         }}
@@ -1607,22 +1589,8 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
                   size="small"
                   placeholder="Search files..."
                   value={searchQuery}
-                  onChange={(e) => {
-                    const query = e.target.value;
-                    setSearchQuery(query);
-                    
-                    // Track search if query is not empty
-                    if (query.trim()) {
-                      analyticsService.trackSearch(query.trim(), filteredFiles.length);
-                    }
-                  }}
-                  sx={{ 
-                    minWidth: { xs: 120, sm: 160, md: 240 },
-                    maxWidth: { xs: 180, sm: 'none' },
-                    '& .MuiInputBase-input': {
-                      fontSize: { xs: '0.875rem', sm: '0.875rem' }
-                    }
-                  }}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  sx={{ minWidth: { xs: 160, md: 240 } }}
                 />
                 {/* Upload */}
               <Tooltip title="Upload Files">
@@ -1631,14 +1599,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
                   startIcon={<CloudUpload />}
                   onClick={() => setShowUploadArea(true)}
                   disabled={hasUploadOperations}
-                    sx={{ 
-                      borderRadius: 2, 
-                      textTransform: 'none', 
-                      fontWeight: 600,
-                      fontSize: { xs: '0.75rem', sm: '0.875rem' },
-                      px: { xs: 1, sm: 2 },
-                      py: { xs: 0.5, sm: 1 }
-                    }}
+                    sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
                 >
                   Upload
                 </Button>
@@ -1648,7 +1609,21 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
                 <Button
                     size="small"
                   startIcon={<CreateNewFolder />}
-                    sx={{ textTransform: 'none', fontWeight: 600, display: { xs: 'none', md: 'inline-flex' } }}
+                    onClick={async () => {
+                      const folderName = prompt('Enter folder name:');
+                      if (folderName && folderName.trim()) {
+                        try {
+                          const response = await mediaAPI.createFolder(folderName.trim(), currentFolder === 'root' ? '' : currentFolder);
+                          alert(`Folder "${folderName.trim()}" created successfully!`);
+                          // Refresh the file list to show the new folder
+                          window.location.reload();
+                        } catch (error) {
+                          const errorMessage = error.response?.data?.error || 'Failed to create folder';
+                          alert(`Error: ${errorMessage}`);
+                        }
+                      }
+                    }}
+                    sx={{ textTransform: 'none', fontWeight: 600 }}
                 >
                   New Folder
                 </Button>
@@ -1822,38 +1797,12 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
         })()}
 
         {/* File Grid/List or Upload Area */}
-      <Box sx={{ 
-        flex: 1, 
-        overflow: 'auto', 
-        pt: { xs: 1, sm: 2, md: 3 }, 
-        pr: { xs: 1, sm: 2, md: 2 }, 
-        pb: { xs: 1, sm: 2, md: 3 }, 
-        pl: { xs: 1, sm: 2, md: 3 },
-        minHeight: 0, // Allows flex child to shrink below content size
-        height: '100%' // Ensures full height utilization
-      }}>
+      <Box sx={{ flex: 1, overflow: 'auto', pt: { xs: 2, md: 3 }, pr: { xs: 2, md: 2 }, pb: { xs: 2, md: 3 }, pl: { xs: 2, md: 3 } }}>
           {/* Status Summary */}
           {filteredFiles.length > 0 && (
-            <Paper sx={{ 
-              p: { xs: 1.5, sm: 2, md: 2.5 }, 
-              mb: { xs: 2, sm: 2.5, md: 3 }, 
-              bgcolor: 'background.paper', 
-              border: `1px solid ${alpha(theme.palette.divider, 0.1)}` 
-            }}>
-              <Box sx={{ 
-                display: 'flex', 
-                alignItems: 'center', 
-                justifyContent: 'space-between', 
-                mb: { xs: 1.5, sm: 2 },
-                flexDirection: { xs: 'column', sm: 'row' },
-                gap: { xs: 1, sm: 0 }
-              }}>
-                <Typography variant="h6" sx={{ 
-                  display: 'flex', 
-                  alignItems: 'center', 
-                  gap: 1,
-                  fontSize: { xs: '1rem', sm: '1.25rem' }
-                }}>
+            <Paper sx={{ p: 2.5, mb: 3, bgcolor: 'background.paper', border: `1px solid ${alpha(theme.palette.divider, 0.1)}` }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+                <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 📊 File Status Summary
               </Typography>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -1881,41 +1830,21 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
                     return acc;
                   }, {});
                   return (
-                    <Stack 
-                      direction={{ xs: 'column', sm: 'row' }} 
-                      spacing={{ xs: 0.5, sm: 1 }} 
-                      alignItems="center"
-                      sx={{ flexWrap: 'wrap', gap: { xs: 0.5, sm: 1 } }}
-                    >
+                    <Stack direction="row" spacing={1} alignItems="center">
                       <Chip
                         label={`Hibernated: ${statusCounts.archived || 0}`}
                         size="small"
-                        sx={{ 
-                          bgcolor: alpha('#94a3b8', 0.15), 
-                          color: '#475569', 
-                          fontWeight: 600,
-                          fontSize: { xs: '0.75rem', sm: '0.8125rem' }
-                        }}
+                        sx={{ bgcolor: alpha('#94a3b8', 0.15), color: '#475569', fontWeight: 600 }}
                       />
                       <Chip
                         label={`Hibernating: ${statusCounts.archiving || 0}`}
                         size="small"
-                        sx={{ 
-                          bgcolor: alpha('#a78bfa', 0.15), 
-                          color: '#6b21a8', 
-                          fontWeight: 600,
-                          fontSize: { xs: '0.75rem', sm: '0.8125rem' }
-                        }}
+                        sx={{ bgcolor: alpha('#a78bfa', 0.15), color: '#6b21a8', fontWeight: 600 }}
                       />
                       <Chip
                         label={`Awake Mode: ${((statusCounts.uploaded || 0) + (statusCounts.restored || 0))}`}
                         size="small"
-                        sx={{ 
-                          bgcolor: alpha('#60a5fa', 0.15), 
-                          color: '#0c4a6e', 
-                          fontWeight: 600,
-                          fontSize: { xs: '0.75rem', sm: '0.8125rem' }
-                        }}
+                        sx={{ bgcolor: alpha('#60a5fa', 0.15), color: '#0c4a6e', fontWeight: 600 }}
                       />
                     </Stack>
                   );

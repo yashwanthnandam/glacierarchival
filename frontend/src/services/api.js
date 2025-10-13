@@ -94,7 +94,14 @@ export const authAPI = {
 };
 
 export const mediaAPI = {
-  getFiles: () => api.get('media-files/'),
+  getFiles: (params = {}) => {
+    // params: { folder, search, paginate }
+    const query = new URLSearchParams();
+    if (params.folder !== undefined) query.set('folder', params.folder);
+    if (params.search) query.set('search', params.search);
+    if (params.paginate === false) query.set('paginate', 'false');
+    return api.get('media-files/list_optimized/', { params: Object.fromEntries(query) });
+  },
   
   // Uppy handles uploads directly via S3 presigned URLs
   archiveFile: (id) => api.post(`media-files/${id}/archive/`),
@@ -125,7 +132,11 @@ export const mediaAPI = {
   getSmartTierSuggestion: (fileSize, fileType) => api.post('media-files/get_smart_tier_suggestion/', { file_size: fileSize, file_type: fileType }),
   getStorageCosts: () => api.get('media-files/get_storage_costs/'),
   getStorageCostsINR: () => api.get('media-files/get_storage_costs_inr/'),
-  autoHibernateFiles: (options) => api.post('media-files/auto_hibernate_files/', options)
+  autoHibernateFiles: (options) => api.post('media-files/auto_hibernate_files/', options),
+  createFolder: (folderName, parentPath = '') => api.post('create-folder/', { 
+    folder_name: folderName, 
+    parent_path: parentPath 
+  })
 };
 
 export const jobAPI = {

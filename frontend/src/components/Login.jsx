@@ -197,6 +197,7 @@ const Login = () => {
               onChange={(e) => setUsername(e.target.value)} 
               required 
               fullWidth
+              autoComplete="username"
               variant="outlined"
               sx={{
                 '& .MuiOutlinedInput-root': {
@@ -212,6 +213,7 @@ const Login = () => {
               onChange={(e) => setPassword(e.target.value)} 
               required 
               fullWidth
+              autoComplete="current-password"
               variant="outlined"
               sx={{
                 '& .MuiOutlinedInput-root': {

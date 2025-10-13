@@ -225,14 +225,23 @@ class MediaFileViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
     def list_optimized(self, request):
-        """Optimized file listing with caching and pagination"""
+        """Optimized file listing with folder/search filters and optional pagination.
+
+        Query params supported:
+        - folder: 'root' for root-level or a path like 'photos/2024'
+        - search: substring match on original_filename (case-insensitive)
+        - paginate: 'false' to return all matched results (default is paginated)
+        - page, page_size: pagination controls when paginate != 'false'
+        """
         user_id = request.user.id
         folder_path = request.query_params.get('folder', '')
+        search_query = request.query_params.get('search', '').strip()
+        paginate = request.query_params.get('paginate', 'true').lower() != 'false'
         page = int(request.query_params.get('page', 1))
         page_size = int(request.query_params.get('page_size', 50))
         
         # Create cache key
-        cache_key = f"files_{user_id}_{folder_path}_{page}_{page_size}"
+        cache_key = f"files_{user_id}_{folder_path}_{search_query}_{paginate}_{page}_{page_size}"
         
         # Try to get from cache first
         cached_result = cache.get(cache_key)
@@ -254,40 +263,54 @@ class MediaFileViewSet(viewsets.ModelViewSet):
                 # Root files (no relative_path or relative_path is empty)
                 queryset = queryset.filter(Q(relative_path__isnull=True) | Q(relative_path=''))
             else:
-                # Files in specific folder
-                queryset = queryset.filter(relative_path__startswith=folder_path)
+                # Files in specific folder (non-recursive immediate folder scope)
+                queryset = queryset.filter(Q(relative_path=folder_path) | Q(relative_path__startswith=f"{folder_path}/"))
+
+        # Apply search filter if provided
+        if search_query:
+            queryset = queryset.filter(original_filename__icontains=search_query)
         
         # Order by upload date for consistency
         queryset = queryset.order_by('-uploaded_at')
         
-        # Paginate
-        paginator = Paginator(queryset, page_size)
-        page_obj = paginator.get_page(page)
-        
-        # Serialize only necessary fields
         files_data = []
-        for file in page_obj:
-            files_data.append({
-                'id': file.id,
-                'original_filename': file.original_filename,
-                'file_size': file.file_size,
-                'file_type': file.file_type,
-                'relative_path': file.relative_path or '',
-                'status': file.status,
-                'uploaded_at': file.uploaded_at.isoformat(),
-                's3_key': file.s3_key
-            })
-        
-        result = {
-            'files': files_data,
-            'pagination': {
-                'current_page': page,
-                'total_pages': paginator.num_pages,
-                'total_files': paginator.count,
-                'has_next': page_obj.has_next(),
-                'has_previous': page_obj.has_previous()
+        if paginate:
+            paginator = Paginator(queryset, page_size)
+            page_obj = paginator.get_page(page)
+            for file in page_obj:
+                files_data.append({
+                    'id': file.id,
+                    'original_filename': file.original_filename,
+                    'file_size': file.file_size,
+                    'file_type': file.file_type,
+                    'relative_path': (file.relative_path or ''),
+                    'status': file.status,
+                    'uploaded_at': file.uploaded_at.isoformat(),
+                })
+            result = {
+                'files': files_data,
+                'pagination': {
+                    'current_page': page_obj.number,
+                    'total_pages': paginator.num_pages,
+                    'total_files': paginator.count,
+                    'has_next': page_obj.has_next(),
+                    'has_previous': page_obj.has_previous()
+                }
             }
-        }
+        else:
+            for file in queryset:
+                files_data.append({
+                    'id': file.id,
+                    'original_filename': file.original_filename,
+                    'file_size': file.file_size,
+                    'file_type': file.file_type,
+                    'relative_path': (file.relative_path or ''),
+                    'status': file.status,
+                    'uploaded_at': file.uploaded_at.isoformat(),
+                })
+            result = {
+                'files': files_data
+            }
         
         # Cache for 5 minutes
         cache.set(cache_key, result, 300)
@@ -1743,3 +1766,64 @@ class UserHibernationPlanViewSet(viewsets.ModelViewSet):
             
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def create_folder(request):
+    """Create a new folder"""
+    try:
+        folder_name = request.data.get('folder_name', '').strip()
+        parent_path = request.data.get('parent_path', '').strip()
+        
+        if not folder_name:
+            return Response({'error': 'Folder name is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Validate folder name (no special characters that could cause issues)
+        import re
+        if not re.match(r'^[a-zA-Z0-9\s\-_\.]+$', folder_name):
+            return Response({
+                'error': 'Folder name contains invalid characters. Only letters, numbers, spaces, hyphens, underscores, and dots are allowed.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Build the full path
+        if parent_path:
+            full_path = f"{parent_path}/{folder_name}"
+        else:
+            full_path = folder_name
+        
+        # Check if folder already exists
+        existing_folder = MediaFile.objects.filter(
+            user=request.user,
+            relative_path=full_path,
+            is_deleted=False,
+            file_type='folder'
+        ).first()
+        
+        if existing_folder:
+            return Response({'error': f'Folder "{folder_name}" already exists'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Create folder entry
+        folder = MediaFile.objects.create(
+            user=request.user,
+            original_filename=folder_name,
+            filename=f"{folder_name}/",  # Add trailing slash to indicate it's a folder
+            file_size=0,
+            file_type='folder',
+            status='uploaded',
+            relative_path=full_path,
+            is_deleted=False
+        )
+        
+        return Response({
+            'message': f'Folder "{folder_name}" created successfully',
+            'folder': {
+                'id': folder.id,
+                'name': folder_name,
+                'path': full_path,
+                'created_at': folder.uploaded_at
+            }
+        }, status=status.HTTP_201_CREATED)
+        
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -15,7 +15,7 @@ import LandingPage from './components/LandingPage';
 import WhyDataHibernate from './components/WhyDataHibernate';
 import theme from './theme';
 import analyticsService from './services/analyticsService';
-import { setUserContext, clearUserContext, SentryErrorBoundary } from './services/sentryService';
+import { setUserContext, clearUserContext } from './services/sentryService';
 
 // Component to track page views
 const PageTracker = () => {
@@ -33,14 +33,13 @@ const PageTracker = () => {
 
 const App = () => {
   return (
-    <SentryErrorBoundary fallback={<div>Something went wrong</div>}>
-      <ThemeProvider theme={theme}>
-        <CssBaseline />
-        <Container maxWidth={false} disableGutters>
-          <Box sx={{ minHeight: '100vh' }}>
-            <Router>
-              <PageTracker />
-              <Routes>
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      <Container maxWidth={false} disableGutters>
+        <Box sx={{ minHeight: '100vh' }}>
+          <Router>
+            <PageTracker />
+            <Routes>
               <Route path="/" element={<LandingPage />} />
               <Route path="/login" element={<Login />} />
               <Route path="/register" element={<Register />} />
@@ -77,7 +76,6 @@ const App = () => {
         </Box>
       </Container>
     </ThemeProvider>
-    </SentryErrorBoundary>
   );
 };
 
