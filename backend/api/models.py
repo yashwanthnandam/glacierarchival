@@ -205,6 +205,36 @@ class EmailVerification(models.Model):
         super().save(*args, **kwargs)
 
 
+class PasswordResetToken(models.Model):
+    """Password reset token model"""
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='password_reset_tokens')
+    token = models.CharField(max_length=100, unique=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    used = models.BooleanField(default=False, db_index=True)
+    expires_at = models.DateTimeField(help_text='Token expiration time')
+
+    class Meta:
+        verbose_name = "Password Reset Token"
+        verbose_name_plural = "Password Reset Tokens"
+
+    def __str__(self):
+        return f"{self.user.username} - {self.token}"
+
+    def save(self, *args, **kwargs):
+        if not self.token:
+            self.token = get_random_string(32)
+        if not self.expires_at:
+            # Password reset tokens expire in 1 hour
+            self.expires_at = timezone.now() + timedelta(hours=1)
+        super().save(*args, **kwargs)
+
+    def is_expired(self):
+        return timezone.now() > self.expires_at
+
+    def is_valid(self):
+        return not self.used and not self.is_expired()
+
+
 class HibernationPlan(models.Model):
     """Hibernation plan definitions"""
     name = models.CharField(max_length=100, help_text='Plan name (e.g., deep_freeze, smart_hibernate)')
@@ -258,7 +288,6 @@ class UserHibernationPlan(models.Model):
     storage_used_bytes = models.BigIntegerField(default=0, help_text='Storage used in bytes')
     retrieval_used_gb = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, help_text='Retrieval used in GB')
     retrieval_period_start = models.DateTimeField(default=timezone.now, help_text='Start of retrieval period')
-    auto_renew = models.BooleanField(default=True, help_text='Whether to automatically renew this subscription')
 
     class Meta:
         verbose_name = "User Hibernation Plan"
@@ -304,3 +333,182 @@ class Payment(models.Model):
 
     def __str__(self):
         return f"{self.user.username} - {self.amount_inr} INR - {self.status}"
+
+
+class UserActivity(models.Model):
+    """Track user activities for analytics and abuse prevention"""
+    ACTIVITY_TYPE_CHOICES = [
+        ('upload', 'Upload'),
+        ('download', 'Download'),
+        ('delete', 'Delete'),
+        ('restore', 'Restore'),
+        ('archive', 'Archive'),
+    ]
+    
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='activities', db_index=True)
+    activity_type = models.CharField(max_length=20, choices=ACTIVITY_TYPE_CHOICES, db_index=True)
+    file_size_bytes = models.BigIntegerField(default=0, help_text='File size in bytes')
+    timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True, help_text='User IP address')
+    user_agent = models.TextField(blank=True, null=True, help_text='User agent string')
+    
+    # Monthly tracking fields
+    month = models.DateField(db_index=True, help_text='Month for tracking (first day of month)')
+    daily_uploads = models.IntegerField(default=0, help_text='Daily upload count')
+    daily_downloads = models.IntegerField(default=0, help_text='Daily download count')
+    daily_storage_changes = models.BigIntegerField(default=0, help_text='Daily storage changes in bytes')
+    
+    # Additional metadata
+    file_id = models.IntegerField(null=True, blank=True, help_text='MediaFile ID if applicable')
+    success = models.BooleanField(default=True, help_text='Whether the activity was successful')
+    error_message = models.TextField(blank=True, null=True, help_text='Error message if failed')
+    
+    class Meta:
+        verbose_name = "User Activity"
+        verbose_name_plural = "User Activities"
+        ordering = ['-timestamp']
+        indexes = [
+            models.Index(fields=['user', 'activity_type']),
+            models.Index(fields=['user', 'month']),
+            models.Index(fields=['activity_type', 'timestamp']),
+            models.Index(fields=['user', 'activity_type', 'month']),
+        ]
+    
+    def __str__(self):
+        return f"{self.user.username} - {self.activity_type} - {self.timestamp.strftime('%Y-%m-%d %H:%M')}"
+
+
+class UserLifetimeUsage(models.Model):
+    """Track lifetime usage for abuse prevention"""
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='lifetime_usage', db_index=True)
+    total_uploaded_bytes = models.BigIntegerField(default=0, help_text='Total bytes uploaded')
+    total_downloaded_bytes = models.BigIntegerField(default=0, help_text='Total bytes downloaded')
+    total_deleted_bytes = models.BigIntegerField(default=0, help_text='Total bytes deleted')
+    peak_storage_bytes = models.BigIntegerField(default=0, help_text='Peak storage usage in bytes')
+    files_uploaded_count = models.IntegerField(default=0, help_text='Total files uploaded')
+    files_downloaded_count = models.IntegerField(default=0, help_text='Total files downloaded')
+    files_deleted_count = models.IntegerField(default=0, help_text='Total files deleted')
+    last_updated = models.DateTimeField(auto_now=True, help_text='Last update timestamp')
+    
+    # Abuse detection metrics
+    upload_delete_ratio = models.DecimalField(max_digits=5, decimal_places=2, default=0.00, help_text='Upload/delete ratio')
+    rapid_cycles_count = models.IntegerField(default=0, help_text='Count of rapid upload/delete cycles')
+    abuse_score = models.DecimalField(max_digits=3, decimal_places=2, default=0.00, help_text='Abuse score (0-1)')
+    
+    class Meta:
+        verbose_name = "User Lifetime Usage"
+        verbose_name_plural = "User Lifetime Usages"
+    
+    def __str__(self):
+        return f"{self.user.username} - Lifetime Usage"
+    
+    @property
+    def total_uploaded_gb(self):
+        """Convert total uploaded bytes to GB"""
+        return round(self.total_uploaded_bytes / (1024**3), 2)
+    
+    @property
+    def total_downloaded_gb(self):
+        """Convert total downloaded bytes to GB"""
+        return round(self.total_downloaded_bytes / (1024**3), 2)
+    
+    @property
+    def peak_storage_gb(self):
+        """Convert peak storage bytes to GB"""
+        return round(self.peak_storage_bytes / (1024**3), 2)
+    
+    def calculate_abuse_score(self):
+        """Calculate abuse score based on usage patterns"""
+        score = 0.0
+        
+        # High upload/delete ratio (abuse indicator)
+        if self.files_uploaded_count > 0:
+            delete_ratio = self.files_deleted_count / self.files_uploaded_count
+            if delete_ratio > 0.8:  # More than 80% deletion rate
+                score += min(0.4, delete_ratio - 0.8) * 2
+        
+        # Rapid cycles (upload and delete within short time)
+        if self.rapid_cycles_count > 10:
+            score += min(0.3, (self.rapid_cycles_count - 10) * 0.02)
+        
+        # Excessive lifetime usage
+        if self.total_uploaded_gb > 100:  # More than 100GB lifetime
+            score += min(0.3, (self.total_uploaded_gb - 100) * 0.01)
+        
+        self.abuse_score = min(1.0, score)
+        return self.abuse_score
+
+
+class UserMonthlyLimits(models.Model):
+    """Track monthly usage limits and consumption"""
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='monthly_limits', db_index=True)
+    month = models.DateField(db_index=True, help_text='First day of the month')
+    
+    # Limits (defaults for free tier)
+    upload_limit_bytes = models.BigIntegerField(default=15*1024**3, help_text='Monthly upload limit in bytes (15GB)')
+    download_limit_bytes = models.BigIntegerField(default=50*1024**3, help_text='Monthly download limit in bytes (50GB)')
+    storage_limit_bytes = models.BigIntegerField(default=15*1024**3, help_text='Monthly storage limit in bytes (15GB)')
+    
+    # Usage tracking
+    uploads_used_bytes = models.BigIntegerField(default=0, help_text='Bytes uploaded this month')
+    downloads_used_bytes = models.BigIntegerField(default=0, help_text='Bytes downloaded this month')
+    storage_peak_bytes = models.BigIntegerField(default=0, help_text='Peak storage usage this month')
+    current_storage_bytes = models.BigIntegerField(default=0, help_text='Current storage usage')
+    
+    # Activity counts
+    upload_count = models.IntegerField(default=0, help_text='Number of uploads this month')
+    download_count = models.IntegerField(default=0, help_text='Number of downloads this month')
+    delete_count = models.IntegerField(default=0, help_text='Number of deletions this month')
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = "User Monthly Limits"
+        verbose_name_plural = "User Monthly Limits"
+        unique_together = ['user', 'month']
+        ordering = ['-month']
+        indexes = [
+            models.Index(fields=['user', 'month']),
+            models.Index(fields=['month']),
+        ]
+    
+    def __str__(self):
+        return f"{self.user.username} - {self.month.strftime('%Y-%m')}"
+    
+    @property
+    def upload_usage_percentage(self):
+        """Calculate upload usage percentage"""
+        if self.upload_limit_bytes == 0:
+            return 0
+        return min(100, (self.uploads_used_bytes / self.upload_limit_bytes) * 100)
+    
+    @property
+    def download_usage_percentage(self):
+        """Calculate download usage percentage"""
+        if self.download_limit_bytes == 0:
+            return 0
+        return min(100, (self.downloads_used_bytes / self.download_limit_bytes) * 100)
+    
+    @property
+    def storage_usage_percentage(self):
+        """Calculate storage usage percentage"""
+        if self.storage_limit_bytes == 0:
+            return 0
+        return min(100, (self.current_storage_bytes / self.storage_limit_bytes) * 100)
+    
+    @property
+    def is_upload_limit_exceeded(self):
+        """Check if upload limit is exceeded"""
+        return self.uploads_used_bytes >= self.upload_limit_bytes
+    
+    @property
+    def is_download_limit_exceeded(self):
+        """Check if download limit is exceeded"""
+        return self.downloads_used_bytes >= self.download_limit_bytes
+    
+    @property
+    def is_storage_limit_exceeded(self):
+        """Check if storage limit is exceeded"""
+        return self.current_storage_bytes >= self.storage_limit_bytes

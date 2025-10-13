@@ -195,20 +195,37 @@ const ModernDashboard = () => {
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', bgcolor: 'grey.50' }}>
       {/* Top App Bar */}
       <AppBar position="static" elevation={1} sx={{ bgcolor: 'white', color: 'text.primary' }}>
-        <Toolbar>
-          <Box sx={{ display: 'flex', alignItems: 'center', mr: 4 }}>
+        <Toolbar sx={{ 
+          minHeight: { xs: 56, sm: 64 },
+          px: { xs: 1, sm: 2 },
+          flexWrap: { xs: 'wrap', sm: 'nowrap' }
+        }}>
+          <Box sx={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            mr: { xs: 2, sm: 4 },
+            minWidth: { xs: 'auto', sm: 'auto' }
+          }}>
             <Box
               component="img"
               src="/icon.png"
               alt="DataHibernate Logo"
               sx={{
-                width: 32,
-                height: 32,
-                mr: 1.5,
+                width: { xs: 28, sm: 32 },
+                height: { xs: 28, sm: 32 },
+                mr: { xs: 1, sm: 1.5 },
                 borderRadius: 1
               }}
             />
-            <Typography variant="h6" component="div" sx={{ fontWeight: 'bold' }}>
+            <Typography 
+              variant="h6" 
+              component="div" 
+              sx={{ 
+                fontWeight: 'bold',
+                fontSize: { xs: '1rem', sm: '1.25rem' },
+                display: { xs: 'none', sm: 'block' } // Hide text on very small screens
+              }}
+            >
               Data Hibernate
             </Typography>
           </Box>
@@ -217,9 +234,22 @@ const ModernDashboard = () => {
           <Tabs
             value={currentView}
             onChange={handleTabChange}
-            sx={{ flexGrow: 1 }}
+            sx={{ 
+              flexGrow: 1,
+              '& .MuiTab-root': {
+                minHeight: { xs: 40, sm: 48 },
+                fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                px: { xs: 1, sm: 2 },
+                textTransform: 'none',
+                fontWeight: 600
+              },
+              '& .MuiTabs-indicator': {
+                height: { xs: 2, sm: 3 }
+              }
+            }}
             variant={isMobile ? 'scrollable' : 'standard'}
             scrollButtons="auto"
+            allowScrollButtonsMobile
           >
             {navigationItems.map((item) => (
               <Tab
@@ -228,36 +258,55 @@ const ModernDashboard = () => {
                 label={item.label}
                 icon={item.icon}
                 iconPosition="start"
-                sx={{ minHeight: 48 }}
+                sx={{ 
+                  minHeight: { xs: 40, sm: 48 },
+                  fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                  px: { xs: 1, sm: 2 },
+                  '& .MuiSvgIcon-root': {
+                    fontSize: { xs: '1rem', sm: '1.25rem' }
+                  }
+                }}
               />
             ))}
           </Tabs>
 
           {/* Right side actions */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Box sx={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: { xs: 0.5, sm: 1 },
+            ml: { xs: 1, sm: 2 }
+          }}>
             {/* Encryption Toggle */}
             <IconButton 
               color="inherit" 
               onClick={handleEncryptionToggle}
               title={encryptionEnabled ? 'Disable E2E Encryption' : 'Enable E2E Encryption'}
+              size="small"
               sx={{ 
                 color: encryptionEnabled ? 'success.main' : 'text.secondary',
                 '&:hover': {
                   bgcolor: encryptionEnabled ? 'success.light' : 'action.hover'
-                }
+                },
+                p: { xs: 0.5, sm: 1 }
               }}
             >
               {encryptionEnabled ? <Lock /> : <LockOpen />}
             </IconButton>
 
-            <IconButton color="inherit">
+            <IconButton color="inherit" size="small" sx={{ p: { xs: 0.5, sm: 1 } }}>
               <Badge badgeContent={0} color="error">
                 <Notifications />
               </Badge>
             </IconButton>
 
-            <IconButton color="inherit" onClick={handleProfileMenuOpen}>
-              <Avatar sx={{ width: 32, height: 32, bgcolor: 'primary.main' }}>
+            <IconButton color="inherit" onClick={handleProfileMenuOpen} size="small" sx={{ p: { xs: 0.5, sm: 1 } }}>
+              <Avatar sx={{ 
+                width: { xs: 28, sm: 32 }, 
+                height: { xs: 28, sm: 32 }, 
+                bgcolor: 'primary.main',
+                fontSize: { xs: '0.75rem', sm: '0.875rem' }
+              }}>
                 {user?.username?.charAt(0) || 'U'}
               </Avatar>
             </IconButton>

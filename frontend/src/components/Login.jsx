@@ -7,12 +7,17 @@ import {
   Typography, 
   Box,
   Link,
-  Alert
+  Alert,
+  Paper,
+  Container,
+  alpha
 } from '@mui/material';
 import { useNavigate, Link as RouterLink } from 'react-router-dom';
 import { authAPI } from '../services/api';
 import { VALIDATION, STORAGE_KEYS } from '../constants';
 import secureTokenStorage from '../utils/secureTokenStorage';
+import analyticsService from '../services/analyticsService';
+import { captureException, setUserContext } from '../services/sentryService';
 
 const Login = () => {
   const [username, setUsername] = useState('');
@@ -84,6 +89,12 @@ const Login = () => {
         // Store user data
         localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
         
+        // Track successful login
+        analyticsService.trackLogin('email');
+        
+        // Set user context in Sentry
+        setUserContext(user);
+        
         navigate('/dashboard');
       } else {
         // Legacy localStorage-based authentication
@@ -94,11 +105,32 @@ const Login = () => {
         secureTokenStorage.setAccessToken(access);
         secureTokenStorage.setRefreshToken(refresh);
         
+        // Track successful login
+        analyticsService.trackLogin('email');
+        
+        // Set user context in Sentry (we'll get user data from API later)
+        setUserContext({ username });
+        
         navigate('/dashboard');
       }
     } catch (err) {
       const errorMessage = getErrorMessage(err);
       setError(errorMessage);
+      
+      // Track login error
+      analyticsService.trackError('login_error', errorMessage, 'login_form');
+      
+      // Capture error in Sentry
+      captureException(err, {
+        tags: {
+          component: 'Login',
+          action: 'login_attempt'
+        },
+        extra: {
+          username: username,
+          error_message: errorMessage
+        }
+      });
       
       // Only log errors in development
       if (import.meta.env.VITE_DEBUG === 'true') {
@@ -110,73 +142,142 @@ const Login = () => {
   };
 
   return (
-    <Card sx={{ maxWidth: 400, mx: 'auto', mt: 4 }}>
-      <CardContent>
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 3 }}>
-          <Box
-            component="img"
-            src="/icon.png"
-            alt="DataHibernate Logo"
-            sx={{
-              width: 40,
-              height: 40,
-              mr: 2,
-              borderRadius: 1
-            }}
-          />
-          <Typography variant="h5" component="h2" sx={{ fontWeight: 'bold' }}>
-            Data Hibernate
-          </Typography>
-        </Box>
-        <Typography variant="h6" component="h3" gutterBottom align="center" color="text.secondary">
-          Login to your account
-        </Typography>
-        
-        {error && (
-          <Alert severity="error" sx={{ mb: 2 }}>
-            {error}
-          </Alert>
-        )}
-        
-        <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <TextField 
-            label="Username" 
-            value={username} 
-            onChange={(e) => setUsername(e.target.value)} 
-            required 
-            fullWidth
-            variant="outlined"
-          />
-          <TextField 
-            type="password" 
-            label="Password" 
-            value={password} 
-            onChange={(e) => setPassword(e.target.value)} 
-            required 
-            fullWidth
-            variant="outlined"
-          />
-          <Button 
-            type="submit" 
-            variant="contained" 
-            fullWidth
-            disabled={loading}
-            sx={{ mt: 2 }}
-          >
-            {loading ? 'Logging in...' : 'Login'}
-          </Button>
-        </Box>
-        
-        <Box sx={{ mt: 2, textAlign: 'center' }}>
-          <Typography variant="body2">
-            Don't have an account?{' '}
-            <Link component={RouterLink} to="/register">
-              Register here
-            </Link>
-          </Typography>
-        </Box>
-      </CardContent>
-    </Card>
+    <Box sx={{ 
+      minHeight: '100vh', 
+      background: 'linear-gradient(135deg, #1976d2 0%, #1565c0 100%)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      py: 4
+    }}>
+      <Container maxWidth="sm">
+        <Paper
+          elevation={0}
+          sx={{
+            p: 4,
+            borderRadius: 4,
+            background: 'rgba(255, 255, 255, 0.95)',
+            backdropFilter: 'blur(10px)',
+            border: '1px solid rgba(255, 255, 255, 0.2)',
+            boxShadow: '0 8px 32px rgba(0, 0, 0, 0.1)'
+          }}
+        >
+          <Box sx={{ textAlign: 'center', mb: 4 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 3 }}>
+              <Box
+                component="img"
+                src="/icon.png"
+                alt="DataHibernate Logo"
+                sx={{
+                  width: 48,
+                  height: 48,
+                  mr: 2,
+                  borderRadius: 2
+                }}
+              />
+              <Typography variant="h4" component="h1" sx={{ fontWeight: 800, color: '#1e293b' }}>
+                Data Hibernate
+              </Typography>
+            </Box>
+            <Typography variant="h6" sx={{ color: '#64748b', fontWeight: 400 }}>
+              Welcome back! Login to your account
+            </Typography>
+          </Box>
+          
+          {error && (
+            <Alert severity="error" sx={{ mb: 3, borderRadius: 2 }}>
+              {error}
+            </Alert>
+          )}
+          
+          <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+            <TextField 
+              label="Username" 
+              value={username} 
+              onChange={(e) => setUsername(e.target.value)} 
+              required 
+              fullWidth
+              variant="outlined"
+              sx={{
+                '& .MuiOutlinedInput-root': {
+                  borderRadius: 2,
+                  backgroundColor: 'rgba(255, 255, 255, 0.8)'
+                }
+              }}
+            />
+            <TextField 
+              type="password" 
+              label="Password" 
+              value={password} 
+              onChange={(e) => setPassword(e.target.value)} 
+              required 
+              fullWidth
+              variant="outlined"
+              sx={{
+                '& .MuiOutlinedInput-root': {
+                  borderRadius: 2,
+                  backgroundColor: 'rgba(255, 255, 255, 0.8)'
+                }
+              }}
+            />
+            <Button 
+              type="submit" 
+              variant="contained" 
+              fullWidth
+              disabled={loading}
+              sx={{ 
+                mt: 2,
+                py: 1.5,
+                fontSize: '1.1rem',
+                fontWeight: 600,
+                borderRadius: 2,
+                background: 'linear-gradient(135deg, #1976d2 0%, #1565c0 100%)',
+                boxShadow: '0 4px 16px rgba(25, 118, 210, 0.3)',
+                '&:hover': {
+                  background: 'linear-gradient(135deg, #1565c0 0%, #0d47a1 100%)',
+                  transform: 'translateY(-2px)',
+                  boxShadow: '0 8px 24px rgba(25, 118, 210, 0.4)'
+                }
+              }}
+            >
+              {loading ? 'Logging in...' : 'Login'}
+            </Button>
+          </Box>
+          
+          <Box sx={{ mt: 4, textAlign: 'center' }}>
+            <Typography variant="body2" sx={{ color: '#64748b', mb: 1 }}>
+              <Link 
+                component={RouterLink} 
+                to="/forgot-password"
+                sx={{ 
+                  color: '#1976d2',
+                  fontWeight: 600,
+                  textDecoration: 'none',
+                  '&:hover': { textDecoration: 'underline' }
+                }}
+              >
+                Forgot your password?
+              </Link>
+            </Typography>
+            <Typography variant="body2" sx={{ color: '#64748b' }}>
+              Don't have an account?{' '}
+              <Link 
+                component={RouterLink} 
+                to="/register"
+                sx={{ 
+                  color: '#1976d2',
+                  fontWeight: 600,
+                  textDecoration: 'none',
+                  '&:hover': { textDecoration: 'underline' }
+                }}
+              >
+                Register here
+              </Link>
+            </Typography>
+          </Box>
+        </Paper>
+      </Container>
+    </Box>
   );
 };
 

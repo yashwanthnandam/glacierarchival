@@ -11,6 +11,7 @@ from django.conf import settings
 from django.utils import timezone
 from django.core.mail import send_mail
 from .models import MediaFile, ArchiveJob, S3Config, EmailVerification, HibernationPlan, UserHibernationPlan
+from .storage_tracking_service import StorageTrackingService
 from .constants import (
     MAX_FILE_SIZE, MAX_TOTAL_SIZE, MAX_FILES_PER_UPLOAD,
     S3_CHUNK_SIZE, S3_MULTIPART_THRESHOLD, EMAIL_VERIFICATION_EXPIRY_HOURS,
@@ -36,18 +37,33 @@ class S3Service:
         self.hibernation_service = HibernationPlanService(user)
     
     def _get_s3_config(self):
-        """Get S3 configuration for user"""
+        """Get S3 configuration for user, create default if not exists"""
         try:
             return S3Config.objects.get(user=self.user)
         except S3Config.DoesNotExist:
-            raise ValueError("S3 configuration required")
+            # Create default S3 config using environment variables
+            from django.conf import settings
+            
+            s3_config = S3Config.objects.create(
+                user=self.user,
+                bucket_name=settings.AWS_STORAGE_BUCKET_NAME,
+                aws_access_key=settings.AWS_S3_ACCESS_KEY_ID,
+                region=settings.AWS_S3_REGION_NAME
+            )
+            
+            # Set encrypted secret key
+            if settings.AWS_S3_SECRET_ACCESS_KEY:
+                s3_config.set_secret_key(settings.AWS_S3_SECRET_ACCESS_KEY)
+                s3_config.save()
+            
+            return s3_config
     
     def _get_s3_client(self):
         """Get S3 client with Transfer Acceleration"""
         return boto3.client(
             's3',
             aws_access_key_id=self.s3_config.aws_access_key,
-            aws_secret_access_key=self.s3_config.aws_secret_key,
+            aws_secret_access_key=self.s3_config.get_secret_key(),
             region_name=self.s3_config.region
         )
     
@@ -155,7 +171,11 @@ class S3Service:
                 raise ValueError(f"Storage limit exceeded. Current usage: {self.hibernation_service.get_storage_usage_percentage():.1f}%")
         
         # Sanitize filename and ensure it fits with UUID prefix
+        from deeparchival.security import sanitize_filename, validate_file_content
         sanitized_name = sanitize_filename(file.name)
+        
+        # Validate file content for security
+        validate_file_content(file)
         uuid_prefix = str(uuid.uuid4())
         
         # Calculate available space for filename (255 - UUID length - underscore)
@@ -466,6 +486,7 @@ class MediaFileService(BaseService):
         super().__init__(user)
         self.s3_service = S3Service(user)
         self.hibernation_service = HibernationPlanService(user)
+        self.storage_tracker = StorageTrackingService(user)
     
     def create_media_file(self, file, relative_path=None):
         """Create media file record and upload to S3 with free tier and hibernation plan enforcement"""
@@ -520,7 +541,51 @@ class MediaFileService(BaseService):
             relative_path=relative_path
         )
         
+        # Track upload activity
+        try:
+            self.storage_tracker.track_upload(media_file)
+        except Exception as e:
+            self.logger.warning(f"Failed to track upload: {str(e)}")
+        
         return media_file
+    
+    def track_download(self, media_file, ip_address=None, user_agent=None):
+        """Track file download activity"""
+        try:
+            self.storage_tracker.track_download(media_file, ip_address, user_agent)
+        except Exception as e:
+            self.logger.warning(f"Failed to track download: {str(e)}")
+    
+    def track_delete(self, media_file, ip_address=None, user_agent=None):
+        """Track file deletion activity"""
+        try:
+            self.storage_tracker.track_delete(media_file, ip_address, user_agent)
+        except Exception as e:
+            self.logger.warning(f"Failed to track deletion: {str(e)}")
+    
+    def get_usage_stats(self):
+        """Get comprehensive usage statistics"""
+        try:
+            return self.storage_tracker.get_usage_stats()
+        except Exception as e:
+            self.logger.error(f"Failed to get usage stats: {str(e)}")
+            raise
+    
+    def check_abuse(self):
+        """Check for abuse patterns"""
+        try:
+            return self.storage_tracker.check_abuse()
+        except Exception as e:
+            self.logger.error(f"Failed to check abuse: {str(e)}")
+            return False, 0.0
+    
+    def sync_storage_usage(self):
+        """Sync storage usage with actual database state"""
+        try:
+            return self.storage_tracker.sync_storage_usage()
+        except Exception as e:
+            self.logger.error(f"Failed to sync storage usage: {str(e)}")
+            raise
     
     def _check_for_duplicate(self, checksum, relative_path, filename):
         """Check if a file with the same content already exists"""
@@ -648,6 +713,8 @@ class MediaFileService(BaseService):
         
         # Security: Filename validation (prevent path traversal)
         import os
+        from deeparchival.security import sanitize_filename, validate_file_content
+        
         filename = os.path.basename(file.name)
         if filename != file.name:
             raise ValueError("Invalid file path - path traversal not allowed")
@@ -655,6 +722,9 @@ class MediaFileService(BaseService):
         # Security: Filename length validation
         if len(filename) > 255:
             raise ValueError("Filename too long (max 255 characters)")
+        
+        # Security: Validate file content
+        validate_file_content(file)
     
     def _calculate_checksum(self, file):
         """Calculate file checksum for integrity"""
@@ -715,6 +785,63 @@ class EmailService:
         
         Best regards,
         Glacier Archival Team
+        """
+        
+        send_mail(
+            subject,
+            message,
+            settings.DEFAULT_FROM_EMAIL,
+            [user.email],
+            fail_silently=False,
+        )
+
+    @staticmethod
+    def send_password_reset_email(user, token, request=None):
+        """Send password reset email"""
+        subject = 'Reset your Data Hibernate password'
+        
+        # Determine the frontend URL dynamically
+        if request:
+            # Check for frontend-specific headers first
+            frontend_host = request.META.get('HTTP_X_FORWARDED_HOST') or request.META.get('HTTP_ORIGIN')
+            
+            if frontend_host:
+                # Extract host from origin (e.g., "http://localhost:5173" -> "localhost:5173")
+                if '://' in frontend_host:
+                    frontend_host = frontend_host.split('://')[1]
+                scheme = 'https' if request.is_secure() else 'http'
+                frontend_url = f"{scheme}://{frontend_host}"
+            else:
+                # Fallback: try to detect frontend port from common patterns
+                host = request.get_host()
+                if ':8000' in host:  # Backend port
+                    frontend_host = host.replace(':8000', ':5173')  # Frontend port
+                    scheme = 'https' if request.is_secure() else 'http'
+                    frontend_url = f"{scheme}://{frontend_host}"
+                else:
+                    # Use the request's origin for dynamic URL
+                    scheme = 'https' if request.is_secure() else 'http'
+                    frontend_url = f"{scheme}://{host}"
+        else:
+            # Fallback to settings or environment
+            frontend_url = settings.FRONTEND_URL
+        
+        reset_url = f"{frontend_url}/reset-password?token={token}"
+        
+        message = f"""
+        Hello {user.username},
+        
+        You requested a password reset for your Data Hibernate account.
+        
+        Please click the link below to reset your password:
+        {reset_url}
+        
+        This link will expire in 1 hour.
+        
+        If you didn't request this password reset, please ignore this email.
+        
+        Best regards,
+        Data Hibernate Team
         """
         
         send_mail(

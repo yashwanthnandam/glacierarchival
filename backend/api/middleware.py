@@ -104,7 +104,7 @@ class RateLimitMiddleware(MiddlewareMixin):
         # Different limits for different types of operations
         if request.path.startswith('/api/uppy/'):
             # Upload operations - allow concurrent batch uploads (3 workers × 50 files = 150 requests)
-            limit = 200  # 200 requests per minute (for concurrent batch uploads)
+            limit = 400  # 400 requests per minute (for concurrent batch uploads)
             window = 60  # 1 minute window
         elif request.path.startswith('/api/media-files/'):
             # File operations - moderate limit

@@ -69,10 +69,10 @@ const LandingPage = () => {
         { storage: '1 TB', price: '₹2,999/year' }
       ],
       description: 'Perfect for memories, backups, and data you rarely need',
-      color: '#4f46e5',
-      gradient: 'linear-gradient(135deg, #4f46e5 0%, #3730a3 100%)',
-      lightColor: '#e0e7ff',
-      darkColor: '#312e81',
+        color: '#1976d2',
+        gradient: 'linear-gradient(135deg, #1976d2 0%, #1565c0 100%)',
+        lightColor: '#e3f2fd',
+        darkColor: '#1565c0',
       bgColor: '#f8fafc',
       textColor: '#1e293b'
     },
@@ -91,10 +91,10 @@ const LandingPage = () => {
         { storage: '1 TB', price: '₹4,799/year' }
       ],
       description: 'Balance between cost and accessibility for regular backups',
-      color: '#2563eb',
-      gradient: 'linear-gradient(135deg, #2563eb 0%, #1e40af 100%)',
-      lightColor: '#dbeafe',
-      darkColor: '#1e3a8a',
+        color: '#1976d2',
+        gradient: 'linear-gradient(135deg, #1976d2 0%, #1565c0 100%)',
+        lightColor: '#e3f2fd',
+        darkColor: '#1565c0',
       bgColor: '#f8fafc',
       textColor: '#1e293b'
     }
@@ -111,16 +111,16 @@ const LandingPage = () => {
   return (
     <Box sx={{ minHeight: '100vh', bgcolor: 'grey.50' }}>
       {/* Hero Section */}
-      <Paper
-        elevation={0}
-        sx={{
-          background: 'linear-gradient(135deg, #4f46e5 0%, #3730a3 100%)',
-          color: 'white',
-          py: { xs: 8, md: 12 },
-          borderRadius: 0,
-          position: 'relative',
-          overflow: 'hidden'
-        }}
+              <Paper
+                elevation={0}
+                sx={{
+                  background: 'linear-gradient(135deg, #1976d2 0%, #1565c0 100%)',
+                  color: 'white',
+                  py: { xs: 8, md: 12 },
+                  borderRadius: 0,
+                  position: 'relative',
+                  overflow: 'hidden'
+                }}
       >
         <Container maxWidth="lg">
           <Grid container spacing={4} alignItems="center">
@@ -172,49 +172,51 @@ const LandingPage = () => {
                   A secure, long-term cloud vault built for people who don't want to think about storage ever again.
                   Whether it's old photos, work archives, or personal backups — just upload once and let it sleep in peace.
                 </Typography>
-                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-                  <Button
-                    variant="contained"
-                    size="large"
-                    endIcon={<ArrowForward />}
-                    sx={{
-                      bgcolor: 'white',
-                      color: '#4f46e5',
-                      px: 4,
-                      py: 1.5,
-                      fontSize: '1.1rem',
-                      fontWeight: 600,
-                      borderRadius: 3,
-                      boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
-                      '&:hover': {
-                        bgcolor: 'rgba(255,255,255,0.9)',
-                        transform: 'translateY(-2px)',
-                        boxShadow: '0 8px 24px rgba(0,0,0,0.3)'
-                      }
-                    }}
-                  >
-                    Start Uploading
-                  </Button>
-                  <Button
-                    variant="outlined"
-                    size="large"
-                    sx={{
-                      borderColor: 'white',
-                      color: 'white',
-                      px: 4,
-                      py: 1.5,
-                      fontSize: '1.1rem',
-                      fontWeight: 600,
-                      borderRadius: 3,
-                      '&:hover': {
-                        borderColor: 'white',
-                        bgcolor: 'rgba(255,255,255,0.1)'
-                      }
-                    }}
-                  >
-                    Learn More
-                  </Button>
-                </Stack>
+                        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+                          <Button
+                            variant="contained"
+                            size="large"
+                            endIcon={<ArrowForward />}
+                            sx={{
+                              bgcolor: 'white',
+                              color: '#1976d2',
+                              px: 4,
+                              py: 1.5,
+                              fontSize: '1.1rem',
+                              fontWeight: 600,
+                              borderRadius: 3,
+                              boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
+                              '&:hover': {
+                                bgcolor: 'rgba(255,255,255,0.9)',
+                                transform: 'translateY(-2px)',
+                                boxShadow: '0 8px 24px rgba(0,0,0,0.3)'
+                              }
+                            }}
+                            onClick={() => window.location.href = '/login'}
+                          >
+                            Get Started
+                          </Button>
+                          <Button
+                            variant="outlined"
+                            size="large"
+                            sx={{
+                              borderColor: 'white',
+                              color: 'white',
+                              px: 4,
+                              py: 1.5,
+                              fontSize: '1.1rem',
+                              fontWeight: 600,
+                              borderRadius: 3,
+                              '&:hover': {
+                                borderColor: 'white',
+                                bgcolor: 'rgba(255,255,255,0.1)'
+                              }
+                            }}
+                            onClick={() => window.location.href = '/why'}
+                          >
+                            Why Choose Us?
+                          </Button>
+                        </Stack>
               </Box>
             </Grid>
             <Grid item xs={12} md={6}>
@@ -313,7 +315,7 @@ const LandingPage = () => {
                     <Box sx={{ textAlign: 'center', p: 3, bgcolor: plan.lightColor, borderRadius: 3, border: `1px solid ${alpha(plan.color, 0.2)}` }}>
                       {plan.pricing.map((price, idx) => (
                         <Box key={idx} sx={{ mb: idx === 0 ? 2 : 0 }}>
-                          <Typography variant="h3" sx={{ fontWeight: 800, mb: 1, color: plan.textColor }}>
+                          <Typography variant="h5" sx={{ fontWeight: 800, mb: 1, color: plan.textColor }}>
                             {price.price}
                           </Typography>
                           <Typography variant="body1" color="text.secondary" sx={{ fontWeight: 500 }}>
@@ -387,9 +389,9 @@ const LandingPage = () => {
                     }
                   }}
                 >
-                  <Box sx={{ color: '#4f46e5', mb: 3 }}>
-                    {React.cloneElement(benefit.icon, { sx: { fontSize: 48 } })}
-                  </Box>
+          <Box sx={{ color: '#1976d2', mb: 3 }}>
+            {React.cloneElement(benefit.icon, { sx: { fontSize: 48 } })}
+          </Box>
                   <Typography variant="h6" sx={{ fontWeight: 600, color: '#1e293b' }}>
                     {benefit.text}
                   </Typography>
@@ -476,15 +478,15 @@ const LandingPage = () => {
       </Container>
 
       {/* CTA Section */}
-      <Paper
-        elevation={0}
-        sx={{
-          background: 'linear-gradient(135deg, #4f46e5 0%, #3730a3 100%)',
-          color: 'white',
-          py: 8,
-          textAlign: 'center',
-          borderRadius: 0
-        }}
+              <Paper
+                elevation={0}
+                sx={{
+                  background: 'linear-gradient(135deg, #1976d2 0%, #1565c0 100%)',
+                  color: 'white',
+                  py: 8,
+                  textAlign: 'center',
+                  borderRadius: 0
+                }}
       >
         <Container maxWidth="md">
           <Typography variant="h3" sx={{ mb: 3, fontWeight: 800 }}>
@@ -497,28 +499,29 @@ const LandingPage = () => {
             <br />
             Just pure, long-term peace.
           </Typography>
-          <Button
-            variant="contained"
-            size="large"
-            endIcon={<ArrowForward />}
-            sx={{
-              bgcolor: 'white',
-              color: '#4f46e5',
-              px: 6,
-              py: 2,
-              fontSize: '1.2rem',
-              fontWeight: 600,
-              borderRadius: 3,
-              boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
-              '&:hover': {
-                bgcolor: 'rgba(255,255,255,0.9)',
-                transform: 'translateY(-2px)',
-                boxShadow: '0 8px 24px rgba(0,0,0,0.3)'
-              }
-            }}
-          >
-            Start Uploading →
-          </Button>
+                  <Button
+                    variant="contained"
+                    size="large"
+                    endIcon={<ArrowForward />}
+                    sx={{
+                      bgcolor: 'white',
+                      color: '#1976d2',
+                      px: 6,
+                      py: 2,
+                      fontSize: '1.2rem',
+                      fontWeight: 600,
+                      borderRadius: 3,
+                      boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
+                      '&:hover': {
+                        bgcolor: 'rgba(255,255,255,0.9)',
+                        transform: 'translateY(-2px)',
+                        boxShadow: '0 8px 24px rgba(0,0,0,0.3)'
+                      }
+                    }}
+                    onClick={() => window.location.href = '/login'}
+                  >
+                    Get Started →
+                  </Button>
         </Container>
       </Paper>
 
@@ -555,6 +558,15 @@ const LandingPage = () => {
                 Quick Links
               </Typography>
               <Stack direction="row" spacing={3} flexWrap="wrap">
+                <Link href="/login" sx={{ color: '#94a3b8', textDecoration: 'none', '&:hover': { color: 'white' } }}>
+                  Login
+                </Link>
+                <Link href="/register" sx={{ color: '#94a3b8', textDecoration: 'none', '&:hover': { color: 'white' } }}>
+                  Register
+                </Link>
+                <Link href="/why" sx={{ color: '#94a3b8', textDecoration: 'none', '&:hover': { color: 'white' } }}>
+                  Why Choose Us
+                </Link>
                 <Link href="#" sx={{ color: '#94a3b8', textDecoration: 'none', '&:hover': { color: 'white' } }}>
                   Privacy Policy
                 </Link>

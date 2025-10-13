@@ -17,7 +17,7 @@ from django.db.models import Q, Count, Sum
 from django.core.paginator import Paginator
 from django.db import transaction
 
-from .models import MediaFile, ArchiveJob, S3Config, EmailVerification, HibernationPlan, UserHibernationPlan, Payment
+from .models import MediaFile, ArchiveJob, S3Config, EmailVerification, HibernationPlan, UserHibernationPlan, Payment, PasswordResetToken
 from .serializers import MediaFileSerializer, ArchiveJobSerializer, UserSerializer, S3ConfigSerializer, HibernationPlanSerializer, UserHibernationPlanSerializer, PaymentSerializer, CreatePaymentSerializer, VerifyPaymentSerializer
 from .payment_service import PaymentService
 from .services import MediaFileService, EmailService, S3Service
@@ -120,6 +120,79 @@ def resend_verification(request):
         }, status=status.HTTP_200_OK)
     except User.DoesNotExist:
         return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def request_password_reset(request):
+    """Request password reset - send reset email"""
+    email = request.data.get('email')
+    if not email:
+        return Response({'error': 'Email is required'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        user = User.objects.get(email=email)
+        
+        # Create password reset token
+        reset_token = PasswordResetToken.objects.create(user=user)
+        
+        # Send password reset email
+        EmailService.send_password_reset_email(user, reset_token.token, request)
+        
+        return Response({
+            'message': 'Password reset email sent successfully. Please check your email.'
+        }, status=status.HTTP_200_OK)
+        
+    except User.DoesNotExist:
+        # Don't reveal if email exists or not for security
+        return Response({
+            'message': 'If an account with this email exists, a password reset email has been sent.'
+        }, status=status.HTTP_200_OK)
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Failed to send password reset email: {str(e)}")
+        return Response({'error': 'Failed to send password reset email'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def reset_password(request):
+    """Reset password using token"""
+    token = request.data.get('token')
+    new_password = request.data.get('password')
+    
+    if not token or not new_password:
+        return Response({'error': 'Token and password are required'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        # Find valid reset token
+        reset_token = PasswordResetToken.objects.get(token=token, used=False)
+        
+        if reset_token.is_expired():
+            return Response({'error': 'Reset token has expired'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Update user password
+        user = reset_token.user
+        user.set_password(new_password)
+        user.save()
+        
+        # Mark token as used
+        reset_token.used = True
+        reset_token.save()
+        
+        return Response({
+            'message': 'Password reset successfully. You can now login with your new password.'
+        }, status=status.HTTP_200_OK)
+        
+    except PasswordResetToken.DoesNotExist:
+        return Response({'error': 'Invalid or expired reset token'}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Failed to reset password: {str(e)}")
+        return Response({'error': 'Failed to reset password'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
@@ -718,9 +791,15 @@ class MediaFileViewSet(viewsets.ModelViewSet):
     def download(self, request, pk=None):
         media_file = self.get_object()
         
-        # Update last_accessed timestamp
-        media_file.last_accessed = timezone.now()
-        media_file.save(update_fields=['last_accessed'])
+        # Track download activity
+        try:
+            media_file_service = MediaFileService(request.user)
+            ip_address = request.META.get('REMOTE_ADDR')
+            user_agent = request.META.get('HTTP_USER_AGENT')
+            media_file_service.track_download(media_file, ip_address, user_agent)
+        except Exception as e:
+            # Log but don't fail the download
+            print(f"Failed to track download: {str(e)}")
         
         try:
             s3_service = S3Service(request.user)
@@ -866,6 +945,16 @@ class MediaFileViewSet(viewsets.ModelViewSet):
     def destroy(self, request, pk=None):
         """Delete file from database, S3, and Glacier"""
         media_file = self.get_object()
+        
+        # Track deletion activity before deleting
+        try:
+            media_file_service = MediaFileService(request.user)
+            ip_address = request.META.get('REMOTE_ADDR')
+            user_agent = request.META.get('HTTP_USER_AGENT')
+            media_file_service.track_delete(media_file, ip_address, user_agent)
+        except Exception as e:
+            # Log but don't fail the deletion
+            print(f"Failed to track deletion: {str(e)}")
         
         try:
             s3_service = S3Service(request.user)
@@ -1575,6 +1664,82 @@ class UserHibernationPlanViewSet(viewsets.ModelViewSet):
             user_plan.save()
             
             return Response({'message': 'Subscription cancelled successfully'})
+            
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['get'])
+    def usage_stats(self, request):
+        """Get comprehensive usage statistics"""
+        try:
+            media_file_service = MediaFileService(request.user)
+            stats = media_file_service.get_usage_stats()
+            
+            # Format response data
+            response_data = {
+                'current_storage': {
+                    'bytes': stats['current_storage_bytes'],
+                    'gb': stats['current_storage_gb']
+                },
+                'lifetime_usage': None,
+                'monthly_usage': None,
+                'abuse_detected': stats['abuse_detected'],
+                'abuse_score': float(stats['abuse_score'])
+            }
+            
+            # Add lifetime usage if available
+            if stats['lifetime_usage']:
+                lifetime = stats['lifetime_usage']
+                response_data['lifetime_usage'] = {
+                    'total_uploaded_gb': lifetime.total_uploaded_gb,
+                    'total_downloaded_gb': lifetime.total_downloaded_gb,
+                    'total_deleted_gb': round(lifetime.total_deleted_bytes / (1024**3), 2),
+                    'peak_storage_gb': lifetime.peak_storage_gb,
+                    'files_uploaded': lifetime.files_uploaded_count,
+                    'files_downloaded': lifetime.files_downloaded_count,
+                    'files_deleted': lifetime.files_deleted_count,
+                    'upload_delete_ratio': float(lifetime.upload_delete_ratio),
+                    'abuse_score': float(lifetime.abuse_score)
+                }
+            
+            # Add monthly usage if available
+            if stats['monthly_usage']:
+                monthly = stats['monthly_usage']
+                response_data['monthly_usage'] = {
+                    'month': monthly.month.strftime('%Y-%m'),
+                    'upload_usage_percentage': monthly.upload_usage_percentage,
+                    'download_usage_percentage': monthly.download_usage_percentage,
+                    'storage_usage_percentage': monthly.storage_usage_percentage,
+                    'uploads_used_gb': round(monthly.uploads_used_bytes / (1024**3), 2),
+                    'downloads_used_gb': round(monthly.downloads_used_bytes / (1024**3), 2),
+                    'current_storage_gb': round(monthly.current_storage_bytes / (1024**3), 2),
+                    'upload_count': monthly.upload_count,
+                    'download_count': monthly.download_count,
+                    'delete_count': monthly.delete_count,
+                    'limits_exceeded': {
+                        'upload': monthly.is_upload_limit_exceeded,
+                        'download': monthly.is_download_limit_exceeded,
+                        'storage': monthly.is_storage_limit_exceeded
+                    }
+                }
+            
+            return Response(response_data)
+            
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['post'])
+    def sync_storage(self, request):
+        """Sync storage usage with actual database state"""
+        try:
+            media_file_service = MediaFileService(request.user)
+            current_storage = media_file_service.sync_storage_usage()
+            
+            return Response({
+                'message': 'Storage usage synced successfully',
+                'current_storage_bytes': current_storage,
+                'current_storage_gb': round(current_storage / (1024**3), 2)
+            })
             
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

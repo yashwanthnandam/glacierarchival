@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   Box,
   Button,
@@ -44,6 +44,8 @@ import {
   formatBytes 
 } from '../utils/uploadValidation';
 import encryptionService from '../services/encryptionService';
+import analyticsService from '../services/analyticsService';
+import { captureException, addBreadcrumb } from '../services/sentryService';
 
 const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelativePath = '' }) => {
   const [isUploading, setIsUploading] = useState(false);
@@ -622,7 +624,7 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
   }, [abortController, activeWorkers]);
 
   // Listen for external cancel events
-  React.useEffect(() => {
+  useEffect(() => {
     const handleCancelEvent = () => {
       if (isUploading) {
         handleCancel();
@@ -694,21 +696,58 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
 
       // Check if there were any failures
       const failedUploads = uploadResults.filter(r => !r.success);
+      const successfulUploads = uploadResults.filter(r => r.success);
+      
+      // Calculate total size of uploaded files
+      const totalSizeBytes = successfulUploads.reduce((sum, result) => sum + (result.fileSize || 0), 0);
+      
+      // Track upload completion
+      analyticsService.trackFileUpload(successfulUploads.length, totalSizeBytes, 'web');
+      
+      // Add breadcrumb for upload completion
+      addBreadcrumb(
+        `Upload completed: ${successfulUploads.length} successful, ${failedUploads.length} failed`,
+        'upload',
+        failedUploads.length > 0 ? 'warning' : 'info',
+        {
+          successful_count: successfulUploads.length,
+          failed_count: failedUploads.length,
+          total_size_mb: Math.round(totalSizeBytes / (1024 * 1024))
+        }
+      );
       
       if (failedUploads.length > 0) {
         setUploadStatus(`Upload completed with ${failedUploads.length} failures`);
         setShowResults(true); // Show results dialog for failures
+        
+        // Track upload errors
+        analyticsService.trackError('upload_error', `${failedUploads.length} files failed`, 'file_upload');
+        
+        // Capture upload errors in Sentry
+        captureException(new Error(`Upload failed: ${failedUploads.length} files failed`), {
+          tags: {
+            component: 'DirectoryUploader',
+            action: 'file_upload'
+          },
+          extra: {
+            failed_count: failedUploads.length,
+            successful_count: successfulUploads.length,
+            total_files: files.reduce((sum, dir) => sum + dir.files.length, 0)
+          }
+        });
       } else {
-        setUploadStatus(`Upload completed! ${uploadResults.length} files uploaded successfully`);
+        setUploadStatus(`Upload completed! ${successfulUploads.length} files uploaded successfully`);
         // Don't show results dialog for successful uploads
       }
       
       // Clean up completed items after upload is finished
       uploadManager.cleanupCompletedItems();
       
-      // Clear file references to free memory
-      setFiles([]);
-      setUploadResults([]);
+      // Clear file references to free memory - delay to ensure UI updates first
+      setTimeout(() => {
+        setFiles([]);
+        setUploadResults([]);
+      }, 100);
     } catch (error) {
       if (error.name === 'AbortError') {
         setUploadStatus('Upload cancelled');
@@ -1382,23 +1421,73 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
 
           {/* Upload Progress */}
           {isUploading && (
-            <Box sx={{ mt: 3 }}>
-              <Typography variant="body2" gutterBottom>
+            <Box sx={{ 
+              mt: 3, 
+              p: { xs: 2, sm: 3 },
+              bgcolor: 'background.paper',
+              borderRadius: 2,
+              border: '1px solid',
+              borderColor: 'divider',
+              boxShadow: 1
+            }}>
+              <Typography 
+                variant="body2" 
+                gutterBottom
+                sx={{ 
+                  fontWeight: 600,
+                  fontSize: { xs: '0.875rem', sm: '1rem' },
+                  color: 'text.primary'
+                }}
+              >
                 {uploadStatus}
               </Typography>
               <LinearProgress 
                 variant="determinate" 
                 value={uploadProgress} 
-                sx={{ mb: 2 }}
+                sx={{ 
+                  mb: 2,
+                  height: { xs: 8, sm: 6 },
+                  borderRadius: { xs: 4, sm: 3 },
+                  bgcolor: 'grey.200',
+                  '& .MuiLinearProgress-bar': {
+                    borderRadius: { xs: 4, sm: 3 },
+                    background: 'linear-gradient(90deg, #1976d2 0%, #42a5f5 100%)'
+                  }
+                }}
               />
-              <Typography variant="body2" color="text.secondary">
-                {uploadProgress.toFixed(1)}% complete
-              </Typography>
+              <Box sx={{ 
+                display: 'flex', 
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}>
+                <Typography 
+                  variant="body2" 
+                  color="text.secondary"
+                  sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' } }}
+                >
+                  {uploadProgress.toFixed(1)}% complete
+                </Typography>
+                <Typography 
+                  variant="body2" 
+                  color="primary.main"
+                  sx={{ 
+                    fontWeight: 600,
+                    fontSize: { xs: '0.75rem', sm: '0.875rem' }
+                  }}
+                >
+                  {files.reduce((sum, dir) => sum + dir.files.length, 0)} files
+                </Typography>
+              </Box>
             </Box>
           )}
 
           {/* Action Buttons */}
-          <Box sx={{ mt: 3, display: 'flex', gap: 2 }}>
+          <Box sx={{ 
+            mt: 3, 
+            display: 'flex', 
+            gap: { xs: 1, sm: 2 },
+            flexDirection: { xs: 'column', sm: 'row' }
+          }}>
             <Button
               variant="contained"
               disabled={validationErrors.length > 0 || files.length === 0 || isUploading}
@@ -1417,9 +1506,15 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
                 handleUpload();
               }}
               startIcon={<CloudUpload />}
-              >
-                {isUploading ? 'Uploading...' : 'Upload Files'}
-              </Button>
+              fullWidth={{ xs: true, sm: false }}
+              sx={{
+                py: { xs: 1.5, sm: 1 },
+                fontSize: { xs: '0.875rem', sm: '1rem' },
+                fontWeight: 600
+              }}
+            >
+              {isUploading ? 'Uploading...' : 'Upload Files'}
+            </Button>
             {isUploading && (
               <Button
                 variant="outlined"
@@ -1427,6 +1522,12 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
                 onClick={handleCancel}
                 disabled={isCancelling}
                 startIcon={<Stop />}
+                fullWidth={{ xs: true, sm: false }}
+                sx={{
+                  py: { xs: 1.5, sm: 1 },
+                  fontSize: { xs: '0.875rem', sm: '1rem' },
+                  fontWeight: 600
+                }}
               >
                 {isCancelling ? 'Cancelling...' : 'Cancel Upload'}
               </Button>
@@ -1443,6 +1544,12 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
               }}
               disabled={isUploading}
               startIcon={<Refresh />}
+              fullWidth={{ xs: true, sm: false }}
+              sx={{
+                py: { xs: 1.5, sm: 1 },
+                fontSize: { xs: '0.875rem', sm: '1rem' },
+                fontWeight: 600
+              }}
             >
               Reset
             </Button>

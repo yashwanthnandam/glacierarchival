@@ -88,7 +88,9 @@ export const authAPI = {
   refresh: () => api.post('auth/refresh/'),
   getUser: () => api.get('auth/user/'),
   verifyEmail: (data) => api.post('auth/verify-email/', data),
-  resendVerification: (data) => api.post('auth/resend-verification/', data)
+  resendVerification: (data) => api.post('auth/resend-verification/', data),
+  requestPasswordReset: (data) => api.post('auth/request-password-reset/', data),
+  resetPassword: (data) => api.post('auth/reset-password/', data)
 };
 
 export const mediaAPI = {

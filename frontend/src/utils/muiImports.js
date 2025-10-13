@@ -156,6 +156,7 @@ export {
   Timeline,
   CurrencyRupee,
   Lock,
+  LockOpen,
   Visibility,
   VisibilityOff,
   Security,

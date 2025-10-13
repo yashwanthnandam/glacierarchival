@@ -42,7 +42,7 @@ export const ErrorDisplay = ({
   if (!error) return null;
 
   const getErrorMessage = (error) => {
-    if (typeof error === 'string') return error;
+    if (typeof error === 'string') return sanitizeErrorMessage(error);
     
     if (error.response) {
       const status = error.response.status;
@@ -51,12 +51,32 @@ export const ErrorDisplay = ({
         case 403: return ERROR_MESSAGES.FORBIDDEN;
         case 404: return ERROR_MESSAGES.NOT_FOUND;
         case 500: return ERROR_MESSAGES.SERVER_ERROR;
-        default: return error.response.data?.message || ERROR_MESSAGES.GENERIC_ERROR;
+        default: return sanitizeErrorMessage(error.response.data?.message || ERROR_MESSAGES.GENERIC_ERROR);
       }
     }
     
-    if (error.message) return error.message;
+    if (error.message) return sanitizeErrorMessage(error.message);
     return ERROR_MESSAGES.GENERIC_ERROR;
+  };
+
+  // Sanitize error messages to prevent XSS
+  const sanitizeErrorMessage = (message) => {
+    if (!message || typeof message !== 'string') return ERROR_MESSAGES.GENERIC_ERROR;
+    
+    // Remove HTML tags and dangerous content
+    return message
+      .replace(/<script[^>]*>.*?<\/script>/gi, '')
+      .replace(/<iframe[^>]*>.*?<\/iframe>/gi, '')
+      .replace(/<object[^>]*>.*?<\/object>/gi, '')
+      .replace(/<embed[^>]*>.*?<\/embed>/gi, '')
+      .replace(/<form[^>]*>.*?<\/form>/gi, '')
+      .replace(/<input[^>]*>/gi, '')
+      .replace(/<textarea[^>]*>.*?<\/textarea>/gi, '')
+      .replace(/<select[^>]*>.*?<\/select>/gi, '')
+      .replace(/javascript:/gi, '')
+      .replace(/on\w+\s*=/gi, '')
+      .replace(/<[^>]*>/g, '')
+      .substring(0, 500); // Limit length
   };
 
   const errorMessage = getErrorMessage(error);

@@ -1,9 +1,43 @@
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+import sentry_sdk
+from sentry_sdk.integrations.django import DjangoIntegration
+from sentry_sdk.integrations.logging import LoggingIntegration
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Initialize Sentry
+sentry_sdk.init(
+    dsn="https://110d09152b148181a66fe8695869ea6f@o4510179546693632.ingest.us.sentry.io/4510179548856320",
+    integrations=[
+        DjangoIntegration(
+            transaction_style='url',
+            middleware_spans=True,
+            signals_spans=True,
+            cache_spans=True,
+        ),
+        LoggingIntegration(
+            level=None,  # Capture all logs
+            event_level=None,  # Send all logs as events
+        ),
+    ],
+    # Performance Monitoring
+    traces_sample_rate=0.1,  # Capture 10% of transactions for performance monitoring
+    # Set sample rate for profiling - this is relative to traces_sample_rate
+    profiles_sample_rate=0.1,
+    # Send default PII (Personally Identifiable Information)
+    send_default_pii=True,
+    # Environment
+    environment=os.getenv('ENVIRONMENT', 'production'),
+    # Release tracking
+    release=os.getenv('RELEASE_VERSION', '1.0.0'),
+    # Additional options
+    attach_stacktrace=True,
+    send_default_pii=True,
+    max_breadcrumbs=50,
+)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -52,11 +86,15 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'api.security_middleware.SecurityHeadersMiddleware',  # Security headers
+    'api.security_middleware.XSSProtectionMiddleware',  # XSS protection
+    'api.security_middleware.InputValidationMiddleware',  # Input validation
+    'api.security_middleware.SecurityLoggingMiddleware',  # Security logging
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'api.middleware.RateLimitMiddleware',  # Rate limiting
+    'api.security_middleware.RateLimitMiddleware',  # Enhanced rate limiting
     'api.middleware.FileSizeLimitMiddleware',  # File size limits
     'api.middleware.UploadValidationMiddleware',  # Upload validation
     'api.middleware.HibernationPlanMiddleware',  # Hibernation plan enforcement

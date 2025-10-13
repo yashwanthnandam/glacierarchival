@@ -44,26 +44,23 @@ services:
       - DB_USER=postgres
       - DB_PASSWORD=secure_password_123
       - DB_PORT=5432
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - AWS_STORAGE_BUCKET_NAME=${AWS_STORAGE_BUCKET_NAME}
-      - AWS_S3_REGION_NAME=${AWS_REGION}
+      - AWS_STORAGE_BUCKET_NAME=datahibernate-storage-1760174502
+      - AWS_S3_REGION_NAME=ap-south-1
       - REDIS_URL=redis://redis:6379/0
-      - EMAIL_HOST=${EMAIL_HOST}
-      - EMAIL_PORT=${EMAIL_PORT}
-      - EMAIL_USE_TLS=${EMAIL_USE_TLS}
-      - EMAIL_USE_SSL=${EMAIL_USE_SSL}
-      - EMAIL_HOST_USER=${EMAIL_HOST_USER}
-      - EMAIL_HOST_PASSWORD=${EMAIL_HOST_PASSWORD}
-      - DEFAULT_FROM_EMAIL=${DEFAULT_FROM_EMAIL}
-      - FRONTEND_URL=${FRONTEND_URL}
+      - EMAIL_HOST=smtpout.secureserver.net
+      - EMAIL_PORT=587
+      - EMAIL_USE_TLS=true
+      - EMAIL_USE_SSL=false
+      - EMAIL_HOST_USER=yashwanth@datahibernate.in
+      - EMAIL_HOST_PASSWORD=Yn1129405+**2
+      - DEFAULT_FROM_EMAIL=Data Hibernate Platform <noreply@datahibernate.in>
+      - FRONTEND_URL=https://datahibernate.in
     volumes:
       - static_files:/app/staticfiles
       - media_files:/app/media
     restart: unless-stopped
     command: >
-      sh -c "python manage.py migrate api 0020_userhibernationplan_auto_renew --fake &&
-             python manage.py migrate &&
+      sh -c "python manage.py migrate &&
              python manage.py collectstatic --noinput &&
              python manage.py populate_hibernation_plans &&
              gunicorn deeparchival.wsgi:application --bind 0.0.0.0:8000 --workers 2"

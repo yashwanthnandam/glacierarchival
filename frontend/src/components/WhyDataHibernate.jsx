@@ -62,36 +62,28 @@ const WhyDataHibernate = () => {
 
   const costComparisonData = [
     {
-      service: 'AWS S3 Standard',
-      storage: '$0.023',
-      transfer: '$0.09',
-      requests: '$0.0004',
-      total: '$23.40',
-      features: ['Basic encryption', 'No E2E', 'High cost']
+      service: 'Google Drive',
+      storage: '1 TB',
+      monthlyPrice: '₹1,300',
+      keyNotes: 'Simple, but costly'
     },
     {
-      service: 'Google Cloud Storage',
-      storage: '$0.020',
-      transfer: '$0.12',
-      requests: '$0.0004',
-      total: '$20.40',
-      features: ['Basic encryption', 'No E2E', 'Complex pricing']
+      service: 'Dropbox',
+      storage: '1 TB',
+      monthlyPrice: '₹1,500',
+      keyNotes: 'Smooth, but pricey'
     },
     {
-      service: 'Azure Blob Storage',
-      storage: '$0.018',
-      transfer: '$0.087',
-      requests: '$0.0004',
-      total: '$18.87',
-      features: ['Basic encryption', 'No E2E', 'Enterprise focused']
+      service: 'OneDrive',
+      storage: '1 TB',
+      monthlyPrice: '₹1,250',
+      keyNotes: 'Great for Office users'
     },
     {
-      service: 'Data Hibernate',
-      storage: '$0.010',
-      transfer: '$0.05',
-      requests: '$0.0002',
-      total: '$10.20',
-      features: ['E2E Encryption', 'Open Source', 'Transparent']
+      service: '☁️ DataHibernate',
+      storage: '1 TB',
+      monthlyPrice: '₹249',
+      keyNotes: '✅ Same AWS reliability\n✅ End-to-End Encrypted\n✅ Transparent, Indian pricing'
     }
   ];
 
@@ -233,7 +225,7 @@ const WhyDataHibernate = () => {
             Why Choose Data Hibernate?
           </Typography>
           <Typography variant="h6" sx={{ color: 'text.secondary', maxWidth: 600, mx: 'auto' }}>
-            The most secure, private, reliable, and cost-effective data archival solution with true end-to-end encryption
+            Save money while keeping your files safe. Simple, secure, and affordable cloud storage.
           </Typography>
         </Box>
       </Paper>
@@ -247,7 +239,7 @@ const WhyDataHibernate = () => {
               Secure
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              Military-grade encryption with open source transparency
+              Your files are encrypted and safe
             </Typography>
           </Paper>
         </Grid>
@@ -258,7 +250,7 @@ const WhyDataHibernate = () => {
               Private
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              Zero-knowledge architecture - we cannot see your files
+              We can't see your files - only you can
             </Typography>
           </Paper>
         </Grid>
@@ -269,7 +261,7 @@ const WhyDataHibernate = () => {
               Reliable
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              99.99% uptime with automatic failover and redundancy
+              Built on AWS - same reliability as big companies
             </Typography>
           </Paper>
         </Grid>
@@ -280,7 +272,7 @@ const WhyDataHibernate = () => {
               Low Cost
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              Up to 50% cheaper than major cloud providers
+              Save up to 80% compared to Google Drive & Dropbox
             </Typography>
           </Paper>
         </Grid>
@@ -289,8 +281,7 @@ const WhyDataHibernate = () => {
       {/* Cost Comparison */}
       <Paper sx={{ p: 2.5, mb: 3, bgcolor: 'background.paper', border: `1px solid ${alpha(theme.palette.divider, 0.1)}` }}>
         <Typography variant="h5" sx={{ fontWeight: 600, mb: 3, display: 'flex', alignItems: 'center', gap: 1, color: 'text.primary' }}>
-          <TrendingDown sx={{ color: '#10b981' }} />
-          Cost Comparison (per 1TB/month)
+          💰 Compare & Save Instantly
         </Typography>
           
           <TableContainer component={Paper} variant="outlined">
@@ -298,11 +289,9 @@ const WhyDataHibernate = () => {
               <TableHead>
                 <TableRow sx={{ bgcolor: 'grey.50' }}>
                   <TableCell sx={{ fontWeight: 600 }}>Service</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 600 }}>Storage</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 600 }}>Transfer</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 600 }}>Requests</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 600 }}>Total/Month</TableCell>
-                  <TableCell sx={{ fontWeight: 600 }}>Features</TableCell>
+                  <TableCell sx={{ fontWeight: 600 }}>Storage</TableCell>
+                  <TableCell sx={{ fontWeight: 600 }}>Monthly Price (1 TB)</TableCell>
+                  <TableCell sx={{ fontWeight: 600 }}>Key Notes</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -310,31 +299,21 @@ const WhyDataHibernate = () => {
                   <TableRow 
                     key={row.service}
                     sx={{ 
-                      bgcolor: row.service === 'Data Hibernate' ? alpha(theme.palette.success.main, 0.1) : 'inherit',
+                      bgcolor: row.service === '☁️ DataHibernate' ? alpha(theme.palette.success.main, 0.1) : 'inherit',
                       '&:hover': { bgcolor: alpha(theme.palette.primary.main, 0.05) }
                     }}
                   >
-                    <TableCell sx={{ fontWeight: row.service === 'Data Hibernate' ? 600 : 'normal' }}>
+                    <TableCell sx={{ fontWeight: row.service === '☁️ DataHibernate' ? 600 : 'normal' }}>
                       {row.service}
                     </TableCell>
-                    <TableCell align="right">${row.storage}/GB</TableCell>
-                    <TableCell align="right">${row.transfer}/GB</TableCell>
-                    <TableCell align="right">${row.requests}/1K</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: row.service === 'Data Hibernate' ? 600 : 'normal' }}>
-                      ${row.total}
+                    <TableCell>{row.storage}</TableCell>
+                    <TableCell sx={{ fontWeight: row.service === '☁️ DataHibernate' ? 600 : 'normal' }}>
+                      {row.monthlyPrice}
                     </TableCell>
                     <TableCell>
-                      <Stack direction="row" spacing={0.5} flexWrap="wrap">
-                        {row.features.map((feature, idx) => (
-                          <Chip
-                            key={idx}
-                            label={feature}
-                            size="small"
-                            color={row.service === 'Data Hibernate' ? 'success' : 'default'}
-                            variant={row.service === 'Data Hibernate' ? 'filled' : 'outlined'}
-                          />
-                        ))}
-                      </Stack>
+                      <Typography variant="body2" sx={{ whiteSpace: 'pre-line' }}>
+                        {row.keyNotes}
+                      </Typography>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -344,8 +323,8 @@ const WhyDataHibernate = () => {
           
           <Alert severity="success" sx={{ mt: 2 }}>
             <Typography variant="body2">
-              <strong>Data Hibernate saves you up to 56% compared to AWS S3!</strong> 
-              Plus you get true end-to-end encryption and open source transparency.
+              <strong>Save up to 80% compared to Google Drive and Dropbox!</strong> 
+              Plus you get the same AWS reliability with end-to-end encryption.
             </Typography>
           </Alert>
       </Paper>

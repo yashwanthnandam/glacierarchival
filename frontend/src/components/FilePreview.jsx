@@ -55,6 +55,7 @@ import {
   CloudSync,
   CloudOff
 } from '@mui/icons-material';
+import { sanitizeUserInput } from '../utils/security';
 
 const FilePreview = ({ 
   open, 
@@ -228,7 +229,7 @@ const FilePreview = ({
                   <Box>
                     <img
                       src={previewUrl || '/api/placeholder/400/300'}
-                      alt={file.original_filename}
+                      alt={sanitizeUserInput(file.original_filename)}
                       style={{
                         maxWidth: '100%',
                         maxHeight: 400,

@@ -11,8 +11,11 @@ from .views import (
     register_user, 
     verify_email, 
     resend_verification, 
-    get_user
+    get_user,
+    request_password_reset,
+    reset_password
 )
+from .test_sentry import test_sentry
 from .secure_auth import (
     secure_login,
     secure_refresh,
@@ -39,6 +42,8 @@ urlpatterns = [
     path('auth/user/', get_user, name='get_user'),
     path('auth/verify-email/', verify_email, name='verify_email'),
     path('auth/resend-verification/', resend_verification, name='resend_verification'),
+    path('auth/request-password-reset/', request_password_reset, name='request_password_reset'),
+    path('auth/reset-password/', reset_password, name='reset_password'),
     
     # Secure cookie-based authentication endpoints
     path('auth/secure/login/', secure_login, name='secure_login'),
@@ -46,4 +51,7 @@ urlpatterns = [
     path('auth/secure/logout/', secure_logout, name='secure_logout'),
     path('auth/secure/user/', secure_user_info, name='secure_user_info'),
     path('auth/secure/register/', secure_register, name='secure_register'),
+    
+    # Test endpoints
+    path('test/sentry/', test_sentry, name='test_sentry'),
 ]
