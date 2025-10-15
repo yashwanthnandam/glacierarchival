@@ -259,12 +259,17 @@ class MediaFileViewSet(viewsets.ModelViewSet):
         
         # Filter by folder if specified
         if folder_path:
+            print(f"DEBUG: Filtering by folder_path: '{folder_path}'")
             if folder_path == 'root':
                 # Root files (no relative_path or relative_path is empty)
                 queryset = queryset.filter(Q(relative_path__isnull=True) | Q(relative_path=''))
+                print(f"DEBUG: Root filter applied, count: {queryset.count()}")
             else:
                 # Files in specific folder (non-recursive immediate folder scope)
                 queryset = queryset.filter(Q(relative_path=folder_path) | Q(relative_path__startswith=f"{folder_path}/"))
+                print(f"DEBUG: Folder filter applied for '{folder_path}', count: {queryset.count()}")
+        else:
+            print("DEBUG: No folder filter applied")
 
         # Apply search filter if provided
         if search_query:
@@ -1701,55 +1706,62 @@ class UserHibernationPlanViewSet(viewsets.ModelViewSet):
             # Format response data
             response_data = {
                 'current_storage': {
-                    'bytes': stats['current_storage_bytes'],
-                    'gb': stats['current_storage_gb']
+                    'bytes': stats.get('current_storage_bytes', 0),
+                    'gb': stats.get('current_storage_gb', 0.0)
                 },
                 'lifetime_usage': None,
                 'monthly_usage': None,
-                'abuse_detected': stats['abuse_detected'],
-                'abuse_score': float(stats['abuse_score'])
+                'abuse_detected': stats.get('abuse_detected', False),
+                'abuse_score': float(stats.get('abuse_score', 0.0))
             }
             
             # Add lifetime usage if available
-            if stats['lifetime_usage']:
-                lifetime = stats['lifetime_usage']
+            if stats.get('lifetime_usage'):
+                lifetime = stats.get('lifetime_usage')
                 response_data['lifetime_usage'] = {
-                    'total_uploaded_gb': lifetime.total_uploaded_gb,
-                    'total_downloaded_gb': lifetime.total_downloaded_gb,
-                    'total_deleted_gb': round(lifetime.total_deleted_bytes / (1024**3), 2),
-                    'peak_storage_gb': lifetime.peak_storage_gb,
-                    'files_uploaded': lifetime.files_uploaded_count,
-                    'files_downloaded': lifetime.files_downloaded_count,
-                    'files_deleted': lifetime.files_deleted_count,
-                    'upload_delete_ratio': float(lifetime.upload_delete_ratio),
-                    'abuse_score': float(lifetime.abuse_score)
+                    'total_uploaded_gb': getattr(lifetime, 'total_uploaded_gb', 0.0),
+                    'total_downloaded_gb': getattr(lifetime, 'total_downloaded_gb', 0.0),
+                    'total_deleted_gb': round(getattr(lifetime, 'total_deleted_bytes', 0) / (1024**3), 2),
+                    'peak_storage_gb': getattr(lifetime, 'peak_storage_gb', 0.0),
+                    'files_uploaded': getattr(lifetime, 'files_uploaded_count', 0),
+                    'files_downloaded': getattr(lifetime, 'files_downloaded_count', 0),
+                    'files_deleted': getattr(lifetime, 'files_deleted_count', 0),
+                    'upload_delete_ratio': float(getattr(lifetime, 'upload_delete_ratio', 0.0)),
+                    'abuse_score': float(getattr(lifetime, 'abuse_score', 0.0))
                 }
             
             # Add monthly usage if available
-            if stats['monthly_usage']:
-                monthly = stats['monthly_usage']
+            if stats.get('monthly_usage'):
+                monthly = stats.get('monthly_usage')
                 response_data['monthly_usage'] = {
-                    'month': monthly.month.strftime('%Y-%m'),
-                    'upload_usage_percentage': monthly.upload_usage_percentage,
-                    'download_usage_percentage': monthly.download_usage_percentage,
-                    'storage_usage_percentage': monthly.storage_usage_percentage,
-                    'uploads_used_gb': round(monthly.uploads_used_bytes / (1024**3), 2),
-                    'downloads_used_gb': round(monthly.downloads_used_bytes / (1024**3), 2),
-                    'current_storage_gb': round(monthly.current_storage_bytes / (1024**3), 2),
-                    'upload_count': monthly.upload_count,
-                    'download_count': monthly.download_count,
-                    'delete_count': monthly.delete_count,
+                    'month': getattr(monthly, 'month', None).strftime('%Y-%m') if getattr(monthly, 'month', None) else None,
+                    'upload_usage_percentage': getattr(monthly, 'upload_usage_percentage', 0.0),
+                    'download_usage_percentage': getattr(monthly, 'download_usage_percentage', 0.0),
+                    'storage_usage_percentage': getattr(monthly, 'storage_usage_percentage', 0.0),
+                    'uploads_used_gb': round(getattr(monthly, 'uploads_used_bytes', 0) / (1024**3), 2),
+                    'downloads_used_gb': round(getattr(monthly, 'downloads_used_bytes', 0) / (1024**3), 2),
+                    'current_storage_gb': round(getattr(monthly, 'current_storage_bytes', 0) / (1024**3), 2),
+                    'upload_count': getattr(monthly, 'upload_count', 0),
+                    'download_count': getattr(monthly, 'download_count', 0),
+                    'delete_count': getattr(monthly, 'delete_count', 0),
                     'limits_exceeded': {
-                        'upload': monthly.is_upload_limit_exceeded,
-                        'download': monthly.is_download_limit_exceeded,
-                        'storage': monthly.is_storage_limit_exceeded
+                        'upload': getattr(monthly, 'is_upload_limit_exceeded', False),
+                        'download': getattr(monthly, 'is_download_limit_exceeded', False),
+                        'storage': getattr(monthly, 'is_storage_limit_exceeded', False)
                     }
                 }
             
             return Response(response_data)
             
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except Exception:
+            # Never 500; return safe defaults
+            return Response({
+                'current_storage': {'bytes': 0, 'gb': 0.0},
+                'lifetime_usage': None,
+                'monthly_usage': None,
+                'abuse_detected': False,
+                'abuse_score': 0.0,
+            })
 
     @action(detail=False, methods=['post'])
     def sync_storage(self, request):

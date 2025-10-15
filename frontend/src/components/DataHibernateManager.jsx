@@ -35,6 +35,7 @@ import {
 // Import centralized file state configuration
 import { getFileStateConfig as getCentralizedFileStateConfig } from '../utils/fileStateConfig';
 import encryptionService from '../services/encryptionService';
+import secureTokenStorage from '../utils/secureTokenStorage';
 import {
   Folder,
   FolderOpen,
@@ -990,11 +991,12 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
           const { summary, failed_files } = response.data;
           
           totalDeleted += summary.successfully_deleted;
-          totalFailed += summary.failed_deletions;
+          totalFailed += summary.failed_deletions || 0;
           
           // Update progress for files in this batch
           batch.forEach(fileId => {
-            const failedFile = failed_files.find(f => f.file_id === fileId);
+            // Handle case where failed_files might not exist (already deleted files)
+            const failedFile = failed_files ? failed_files.find(f => f.file_id === fileId) : null;
             if (failedFile) {
               setBulkOperationProgress(prev => ({
                 ...prev,
@@ -1080,7 +1082,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
   // Load files
   useEffect(() => {
     loadFiles();
-  }, []);
+  }, [currentFolder, searchQuery]);
 
   // Check encryption status
   useEffect(() => {
@@ -1169,22 +1171,88 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
   async function loadFiles() {
     try {
       setLoading(true);
+      
+      // Check if user is authenticated
+      const token = secureTokenStorage.getAccessToken();
+      if (!token) {
+        console.error('No authentication token found');
+        setFiles([]);
+        setFolders([]);
+        return;
+      }
+      
       const response = await mediaAPI.getFiles({
         folder: currentFolder === 'root' ? 'root' : currentFolder,
         search: searchQuery?.trim() || '',
         paginate: false,
       });
-      const allFiles = response.data || [];
+      
+      // Check if the response is an error
+      if (response.status !== 200) {
+        console.error('API returned non-200 status:', response.status);
+        setFiles([]);
+        setFolders([]);
+        return;
+      }
+      
+      // Handle different response structures
+      let allFiles = [];
+      if (response.data && Array.isArray(response.data.files)) {
+        allFiles = response.data.files;
+      } else if (Array.isArray(response.data)) {
+        allFiles = response.data;
+      } else if (response.data && Array.isArray(response.data.data)) {
+        allFiles = response.data.data;
+      }
+
+      // Ensure allFiles is always an array
+      if (!Array.isArray(allFiles)) {
+        allFiles = [];
+      }
 
       // Group files by folder structure
       const folderMap = new Map();
       const fileList = [];
 
       allFiles.forEach((file) => {
-        // Try to get path from relative_path first, then s3_key
+        // Check if this is an explicit folder entry
+        if (file.file_type === 'folder') {
+          const path = file.relative_path || '';
+          const pathParts = path.split('/').filter((p) => p !== '');
+          
+          if (pathParts.length === 0) {
+            // Root level folder
+            const folderPath = file.original_filename;
+            folderMap.set(folderPath, {
+              name: file.original_filename,
+              path: folderPath,
+              parent: 'root',
+              fileCount: 0,
+              size: 0
+            });
+          } else {
+            // Nested folder
+            let currentPath = 'root';
+            pathParts.forEach((part, index) => {
+              const folderPath = currentPath === 'root' ? part : `${currentPath}/${part}`;
+              if (!folderMap.has(folderPath)) {
+                folderMap.set(folderPath, {
+                  name: part,
+                  path: folderPath,
+                  parent: currentPath,
+                  fileCount: 0,
+                  size: 0
+                });
+              }
+              currentPath = folderPath;
+            });
+          }
+          return; // Skip processing as a regular file
+        }
+
+        // Process regular files
         const path = file.relative_path || file.s3_key || '';
         const pathParts = path.split('/').filter((p) => p !== '');
-
 
         if (pathParts.length === 0) {
           fileList.push(file);
@@ -1202,7 +1270,6 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
                 fileCount: 0,
                 size: 0,
               });
-            } else {
             }
             currentPath = folderPath;
           });
@@ -1214,6 +1281,11 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
 
       // Calculate folder stats
       allFiles.forEach((file) => {
+        // Skip folder entries when calculating stats
+        if (file.file_type === 'folder') {
+          return;
+        }
+        
         const filePath = file.relative_path || file.s3_key || '';
         const pathParts = filePath.split('/').filter((p) => p !== '');
         let currentPath = 'root';
@@ -1230,15 +1302,48 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
         });
       });
 
+      // Special handling for root-level folders when we're in root view
+      // If we're viewing root and only see folder entries (not their contents),
+      // we need to make additional API calls to get the actual file counts
+      if (currentFolder === 'root' && allFiles.length > 0 && allFiles.every(f => f.file_type === 'folder')) {
+        // For each root-level folder, make an API call to get its contents
+        const folderStatsPromises = allFiles
+          .filter(f => f.file_type === 'folder' && (!f.relative_path || f.relative_path === ''))
+          .map(async (folder) => {
+            try {
+              const response = await mediaAPI.getFiles({
+                folder: folder.original_filename,
+                search: '',
+                paginate: false,
+              });
+              
+              const folderFiles = response.data.files || [];
+              const totalFiles = folderFiles.filter(f => f.file_type !== 'folder').length;
+              const totalSize = folderFiles
+                .filter(f => f.file_type !== 'folder')
+                .reduce((sum, f) => sum + (f.file_size || 0), 0);
+              
+              // Update the folder stats
+              const folderPath = folder.original_filename;
+              const folderEntry = folderMap.get(folderPath);
+              if (folderEntry) {
+                folderEntry.fileCount = totalFiles;
+                folderEntry.size = totalSize;
+              }
+              
+              return { folderPath, fileCount: totalFiles, size: totalSize };
+            } catch (error) {
+              console.error(`Error getting stats for folder ${folder.original_filename}:`, error);
+              return { folderPath: folder.original_filename, fileCount: 0, size: 0 };
+            }
+          });
+        
+        // Wait for all folder stats to be calculated
+        await Promise.all(folderStatsPromises);
+      }
+
       setFiles(fileList);
       setFolders(Array.from(folderMap.values()));
-      
-      // Debug: Log final folder structure
-      Array.from(folderMap.values()).forEach(folder => {
-      });
-      
-      // Debug: Check for lib folder specifically
-      const libFolders = Array.from(folderMap.values()).filter(f => f.name === 'lib' || f.path.includes('lib'));
     } catch (error) {
       console.error('Error loading files:', error);
     } finally {
@@ -1275,10 +1380,19 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
           
           // File is directly in this folder if:
           // 1. Path exactly matches the folder path (file is the folder itself)
-          // 2. Path starts with folderPath + '/' but has no more slashes after that
-          return path === folderPath || 
-                 (path.startsWith(folderPath + '/') && 
-                  path.substring(folderPath.length + 1).indexOf('/') === -1);
+          // 2. Path starts with folderPath + '/' and the next part has no more slashes
+          if (path === folderPath) {
+            return true; // This is the folder itself
+          }
+          
+          if (path.startsWith(folderPath + '/')) {
+            // Get the part after the folder path
+            const afterFolder = path.substring(folderPath.length + 1);
+            // Check if this is a direct child (no more slashes in the remaining path)
+            return afterFolder.indexOf('/') === -1;
+          }
+          
+          return false;
         }
       });
     }
@@ -1289,11 +1403,15 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
   // Get subfolders for the current folder to show in main content - Optimized
   const currentFolderSubfolders = useMemo(() => {
     if (searchQuery) return [];
+    
+    let result;
     if (currentFolder === 'root') {
-      return folders.filter(f => f.parent === 'root');
+      result = folders.filter(f => f.parent === 'root');
     } else {
-      return folders.filter(f => f.parent === currentFolder);
+      result = folders.filter(f => f.parent === currentFolder);
     }
+    
+    return result;
   }, [folders, currentFolder, searchQuery]);
 
   // Format file size
@@ -1721,7 +1839,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
         {/* Enhanced Delete Progress */}
         {(() => {
           const deleteOps = uploadManagerState.deleteOperations || [];
-          const activeDeleteOp = deleteOps.find(op => op.status === 'deleting');
+          const activeDeleteOp = deleteOps.find(op => op && op.status === 'deleting');
           if (!activeDeleteOp) return null;
           
           const total = activeDeleteOp.totalFiles || 0;

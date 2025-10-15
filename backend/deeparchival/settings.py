@@ -35,7 +35,6 @@ sentry_sdk.init(
     release=os.getenv('RELEASE_VERSION', '1.0.0'),
     # Additional options
     attach_stacktrace=True,
-    send_default_pii=True,
     max_breadcrumbs=50,
 )
 
