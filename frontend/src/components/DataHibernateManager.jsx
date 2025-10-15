@@ -1220,7 +1220,8 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
           const path = file.relative_path || '';
           const pathParts = path.split('/').filter((p) => p !== '');
           
-          if (pathParts.length === 0) {
+          // Check if this is a root-level folder (relative_path matches original_filename)
+          if (pathParts.length === 0 || (pathParts.length === 1 && pathParts[0] === file.original_filename)) {
             // Root level folder
             const folderPath = file.original_filename;
             folderMap.set(folderPath, {

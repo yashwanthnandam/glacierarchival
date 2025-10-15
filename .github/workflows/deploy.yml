@@ -90,6 +90,11 @@ jobs:
           echo "🔄 Running database migrations..."
           docker exec glacierarchival-backend-1 python manage.py migrate
           
+          echo "🔄 Checking for pending migrations..."
+          docker exec glacierarchival-backend-1 python manage.py makemigrations --check --dry-run || echo "⚠️ Pending migrations found, applying them..."
+          docker exec glacierarchival-backend-1 python manage.py makemigrations
+          docker exec glacierarchival-backend-1 python manage.py migrate
+          
           echo "🔄 Collecting static files..."
           docker exec glacierarchival-backend-1 python manage.py collectstatic --noinput --clear || echo "⚠️ Static files collection failed, continuing..."
           
