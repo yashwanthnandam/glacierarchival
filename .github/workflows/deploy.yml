@@ -62,6 +62,15 @@ jobs:
           ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY }}
           EOF
           
+          # Export environment variables to host environment (for docker-compose)
+          export AWS_ACCESS_KEY_ID='${{ secrets.AWS_ACCESS_KEY_ID }}'
+          export AWS_SECRET_ACCESS_KEY='${{ secrets.AWS_SECRET_ACCESS_KEY }}'
+          export EMAIL_HOST_PASSWORD='${{ secrets.EMAIL_HOST_PASSWORD }}'
+          export RAZORPAY_KEY_ID='${{ secrets.RAZORPAY_KEY_ID }}'
+          export RAZORPAY_KEY_SECRET='${{ secrets.RAZORPAY_KEY_SECRET }}'
+          export SECRET_KEY='${{ secrets.SECRET_KEY }}'
+          export ENCRYPTION_KEY='${{ secrets.ENCRYPTION_KEY }}'
+          
           echo "🔄 Building frontend..."
           cd frontend
           npm install
