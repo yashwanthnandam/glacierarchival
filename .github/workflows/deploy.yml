@@ -96,9 +96,19 @@ jobs:
           
     - name: Health check
       run: |
-        sleep 30
-        curl -f https://datahibernate.in/api/auth/user/ || exit 1
-        echo "✅ Health check passed!"
+        echo "🔄 Starting health check with retries..."
+        for i in {1..5}; do
+          echo "Health check attempt $i/5..."
+          if curl -f https://datahibernate.in/api/auth/user/; then
+            echo "✅ Health check passed!"
+            exit 0
+          else
+            echo "Health check failed. Retry $i/5..."
+            sleep 10
+          fi
+        done
+        echo "❌ Health check failed after 5 attempts."
+        exit 1
         
     - name: Notify deployment status
       if: always()
