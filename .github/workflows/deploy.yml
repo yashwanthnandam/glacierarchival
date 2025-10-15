@@ -40,13 +40,20 @@ jobs:
           echo "🔄 Stopping services..."
           docker-compose -f docker-compose.production.yml down
           
-          echo "🔄 Pulling latest code from Git..."
-          git fetch origin
-          git reset --hard origin/main
+          echo "🔄 Setting up repository..."
+          if [ -d "glacierarchival" ]; then
+            cd glacierarchival
+            git fetch origin
+            git reset --hard origin/main
+            cd ..
+          else
+            git clone https://github.com/yashwanthnandam/glacierarchival.git
+            cd glacierarchival
+          fi
           
           echo "🔄 Setting up environment variables..."
           # Create .env.production file with actual credentials
-          cat > .env.production << 'EOF'
+          cat > glacierarchival/.env.production << 'EOF'
           AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
           EMAIL_HOST_PASSWORD=${{ secrets.EMAIL_HOST_PASSWORD }}
@@ -57,22 +64,23 @@ jobs:
           EOF
           
           echo "🔄 Building frontend..."
-          cd frontend
+          cd glacierarchival/frontend
           npm install
           npm run build
-          cd ..
+          cd ../..
           
           echo "🔄 Building and starting services..."
+          cd glacierarchival
           docker-compose -f docker-compose.production.yml --env-file .env.production up --build -d
           
           echo "⏳ Waiting for services to start..."
           sleep 15
           
           echo "🔄 Running database migrations..."
-          docker exec ec2-user-backend-1 python manage.py migrate
+          docker exec glacierarchival-backend-1 python manage.py migrate
           
           echo "🔄 Collecting static files..."
-          docker exec ec2-user-backend-1 python manage.py collectstatic --noinput
+          docker exec glacierarchival-backend-1 python manage.py collectstatic --noinput
           
           echo "🔄 Restarting services..."
           docker-compose -f docker-compose.production.yml --env-file .env.production restart
