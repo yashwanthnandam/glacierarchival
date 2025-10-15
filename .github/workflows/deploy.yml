@@ -45,7 +45,6 @@ jobs:
             cd glacierarchival
             git fetch origin
             git reset --hard origin/main
-            cd ..
           else
             git clone https://github.com/yashwanthnandam/glacierarchival.git
             cd glacierarchival
@@ -53,7 +52,7 @@ jobs:
           
           echo "🔄 Setting up environment variables..."
           # Create .env.production file with actual credentials
-          cat > glacierarchival/.env.production << 'EOF'
+          cat > .env.production << 'EOF'
           AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
           EMAIL_HOST_PASSWORD=${{ secrets.EMAIL_HOST_PASSWORD }}
@@ -64,13 +63,12 @@ jobs:
           EOF
           
           echo "🔄 Building frontend..."
-          cd glacierarchival/frontend
+          cd frontend
           npm install
           npm run build
-          cd ../..
+          cd ..
           
           echo "🔄 Building and starting services..."
-          cd glacierarchival
           docker-compose -f docker-compose.production.yml --env-file .env.production up --build -d
           
           echo "⏳ Waiting for services to start..."
