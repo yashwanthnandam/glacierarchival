@@ -62,6 +62,17 @@ jobs:
           ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY }}
           EOF
           
+          # Create backend/.env file (required by docker-compose)
+          cat > backend/.env << 'EOF'
+          AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          EMAIL_HOST_PASSWORD=${{ secrets.EMAIL_HOST_PASSWORD }}
+          RAZORPAY_KEY_ID=${{ secrets.RAZORPAY_KEY_ID }}
+          RAZORPAY_KEY_SECRET=${{ secrets.RAZORPAY_KEY_SECRET }}
+          SECRET_KEY=${{ secrets.SECRET_KEY }}
+          ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY }}
+          EOF
+          
           echo "🔄 Building frontend..."
           cd frontend
           npm install
