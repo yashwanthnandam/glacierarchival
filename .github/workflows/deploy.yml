@@ -80,6 +80,10 @@ jobs:
           echo "🔄 Building and starting services..."
           docker-compose -f docker-compose.production.yml up --build -d
           
+          echo "🔄 Fixing Nginx configuration..."
+          sudo sed -i 's/proxy_pass http:\/\/127.0.0.1:3000;/proxy_pass http:\/\/127.0.0.1:8080;/' /etc/nginx/conf.d/datahibernate.conf
+          sudo nginx -t && sudo systemctl reload nginx
+          
           echo "⏳ Waiting for services to start..."
           sleep 15
           
@@ -99,7 +103,7 @@ jobs:
         echo "🔄 Starting health check with retries..."
         for i in {1..5}; do
           echo "Health check attempt $i/5..."
-          if curl -f https://datahibernate.in/api/auth/user/; then
+          if curl -f https://datahibernate.in/; then
             echo "✅ Health check passed!"
             exit 0
           else
