@@ -28,19 +28,6 @@ jobs:
         cd frontend
         npm install
         
-    - name: Build frontend
-      run: |
-        cd frontend
-        npm run build
-        
-    - name: Commit build files
-      run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        git add frontend/dist/
-        git diff --staged --quiet || git commit -m "Build frontend for deployment [skip ci]"
-        git push
-        
     - name: Deploy to server
       uses: appleboy/ssh-action@v1.0.3
       with:
@@ -68,6 +55,12 @@ jobs:
           SECRET_KEY=${{ secrets.SECRET_KEY }}
           ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY }}
           EOF
+          
+          echo "🔄 Building frontend..."
+          cd frontend
+          npm install
+          npm run build
+          cd ..
           
           echo "🔄 Building and starting services..."
           docker-compose -f docker-compose.production.yml --env-file .env.production up --build -d
