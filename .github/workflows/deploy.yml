@@ -69,7 +69,7 @@ jobs:
           cd ..
           
           echo "🔄 Building and starting services..."
-          docker-compose -f docker-compose.production.yml --env-file .env.production up --build -d
+          docker-compose -f docker-compose.production.yml up --build -d
           
           echo "⏳ Waiting for services to start..."
           sleep 15
@@ -78,10 +78,10 @@ jobs:
           docker exec glacierarchival-backend-1 python manage.py migrate
           
           echo "🔄 Collecting static files..."
-          docker exec glacierarchival-backend-1 python manage.py collectstatic --noinput
+          docker exec glacierarchival-backend-1 python manage.py collectstatic --noinput --clear
           
           echo "🔄 Restarting services..."
-          docker-compose -f docker-compose.production.yml --env-file .env.production restart
+          docker-compose -f docker-compose.production.yml restart
           
           echo "✅ Deployment completed!"
           
