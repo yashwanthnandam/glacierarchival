@@ -71,301 +71,66 @@ import { mediaAPI } from '../services/api';
 import { useFileActions } from '../hooks/useFileActions';
 import DirectoryUploader from './DirectoryUploader';
 import DownloadProgressDialog from './DownloadProgressDialog';
+import uploadManager from '../services/uploadManager';
 
-// Enhanced Upload Progress Bar Component with Better UX
+// SIMPLIFIED Upload Progress Bar - Basic progress only
 const UploadProgressBar = memo(({ uploadManagerState }) => {
   const state = uploadManagerState;
   if (!state) return null;
   
-  // Use upload-only counters to avoid denominator jumping when other operations run
-  const total = state.uploadTotal ?? state.total ?? 0;
-  const completed = state.uploadCompleted ?? state.completed ?? 0;
-  const active = state.uploadInProgress ?? state.inProgress ?? 0;
-  const queued = state.uploadQueued ?? state.queued ?? 0;
-  const failed = state.uploadFailed ?? state.failed ?? 0;
+  // Use global session totals instead of current queue state
+  const total = state.uploadTotal ?? 0;
+  const completed = state.uploadCompleted ?? 0;
+  const active = state.uploadInProgress ?? 0;
+  const queued = state.uploadQueued ?? 0;
   
-  // Count cancelled uploads from items
-  const cancelled = state.items ? state.items.filter(item => 
-    item.operationType === 'upload' && item.status === 'cancelled'
-  ).length : 0;
-  
-  // Simplified logic - show if there are any items and it's not only delete operations
-  const hasItems = state.items && state.items.length > 0;
-  const hasOnlyDeleteOperations = hasItems && state.items.every(item => 
-    item.operationType === 'delete'
-  );
-  
-  // Show if there are items and it's not only delete operations
-  if (!hasItems || hasOnlyDeleteOperations || total === 0) return null;
+  // Only show if there are active uploads
+  if (total === 0 || (active === 0 && queued === 0)) return null;
   
   const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
   const remaining = total - completed;
   
-  // State declarations moved up to prevent hoisting issues
-  const [showCompleted, setShowCompleted] = useState(true);
-  const [lastCompletedStatus, setLastCompletedStatus] = useState(null);
-  const [debouncedStatus, setDebouncedStatus] = useState('uploading');
-  const [debouncedStatusText, setDebouncedStatusText] = useState('');
-  const [lastActiveTime, setLastActiveTime] = useState(Date.now());
-  
-  // Enhanced status determination with better UX - Optimized to prevent flickering
-  let status = 'uploading';
+  // SIMPLIFIED: Only show completed/total files with percentage
   let statusText = '';
-  let statusColor = '#60a5fa';
-  let progressColor = '#60a5fa';
-  
-  if (active === 0 && queued === 0 && completed > 0) {
-    status = 'completed';
-    // Use green for success, orange only for failures to reduce flickering
-    statusColor = failed > 0 ? '#f59e0b' : '#6b7280';
-    progressColor = failed > 0 ? '#f59e0b' : '#6b7280';
-    
-    if (cancelled > 0) {
-      statusText = `⏹️ Upload cancelled! ${completed} files uploaded, ${cancelled} cancelled`;
-      statusColor = '#6b7280';
-      progressColor = '#6b7280';
-    } else if (failed > 0) {
-      statusText = `✅ Upload completed! ${completed} successful, ${failed} failed`;
-    } else {
-      statusText = `🎉 Upload completed! All ${completed} files uploaded successfully`;
-    }
-  } else if (active === 0 && queued > 0 && completed > 0 && queued > 50 && (Date.now() - lastActiveTime) > 2000) {
-    // Only show stalled if there are significantly queued files AND no active uploads
-    // AND no recent activity (2 seconds) - prevents flickering during batch transitions
-    status = 'stalled';
-    statusColor = '#f59e0b';
-    progressColor = '#f59e0b';
-    statusText = `⏸️ Upload paused: ${queued} files pending`;
-  } else if (completed === 0 && queued > 0) {
-    status = 'starting';
-    statusText = '🚀 Preparing upload...';
-  } else if (active > 0) {
-    status = 'uploading';
-    statusText = `📤 Uploading ${remaining} of ${total} files`;
+  if (total > 0) {
+    statusText = `📤 Uploading ${completed}/${total} files (${percentage}%)`;
+  } else {
+    statusText = `✅ Upload completed!`;
   }
   
-  // Auto-hide completed uploads after 3 seconds - Fixed to prevent flickering
-  
-  // Update last active time when uploads are active
-  useEffect(() => {
-    if (active > 0) {
-      setLastActiveTime(Date.now());
-    }
-  }, [active]);
-  
-  // Debounce status changes to prevent rapid flickering
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedStatus(status);
-      setDebouncedStatusText(statusText);
-    }, 300); // 300ms debounce for smoother updates
-    
-    return () => clearTimeout(timer);
-  }, [status, statusText]);
-  
-  useEffect(() => {
-    if (debouncedStatus === 'completed') {
-      // Only start timer if this is a new completion (not already completed)
-      if (lastCompletedStatus !== 'completed') {
-        setLastCompletedStatus('completed');
-        const timer = setTimeout(() => {
-          setShowCompleted(false);
-        }, 3000);
-        return () => clearTimeout(timer);
-      }
-    } else {
-      // Reset when status changes away from completed
-      if (lastCompletedStatus === 'completed') {
-        setLastCompletedStatus(null);
-        setShowCompleted(true);
-      }
-    }
-  }, [debouncedStatus, lastCompletedStatus]);
-  
-  if (status === 'completed' && !showCompleted) return null;
-  
+  const handleCancel = () => {
+    uploadManager.cancelAllUploads();
+  };
+
   return (
-    <Fade in={true} timeout={150}>
-      <Box sx={{ px: { xs: 2, md: 3 }, pt: 1.5 }}>
-        <Paper sx={{ 
-          p: 2, 
-          border: `1px solid ${alpha(statusColor, 0.2)}`,
-          background: `linear-gradient(135deg, ${alpha(statusColor, 0.05)} 0%, ${alpha(statusColor, 0.02)} 100%)`,
-          boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-          transition: 'all 0.15s ease'
-        }}>
-          <Stack direction="row" alignItems="center" spacing={2}>
-            <Box sx={{ 
-              p: 1, 
-              borderRadius: '50%', 
-              bgcolor: alpha(statusColor, 0.1),
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center'
-            }}>
-              <CloudUpload sx={{ color: statusColor, fontSize: 20 }} />
-            </Box>
-            
-            <Box sx={{ flex: 1 }}>
-              <Typography variant="body2" sx={{ fontWeight: 600, color: statusColor }}>
-                {debouncedStatusText || statusText}
-              </Typography>
-            </Box>
-            
-            <Stack direction="row" spacing={1} alignItems="center">
-              {(status === 'uploading' || status === 'starting') && (
-                <Button
-                  size="small"
-                  variant="outlined"
-                  color="error"
-                  sx={{ minWidth: 'auto', px: 2 }}
-                  onClick={async () => {
-                    try {
-                      await uploadManager.cancelAllUploads();
-                    } catch (error) {
-                      console.error('Error cancelling uploads:', error);
-                    }
-                  }}
-                >
-                  Cancel
-                </Button>
-              )}
-              
-              {status !== 'starting' && (
-                <Typography 
-                  variant="caption" 
-                  sx={{ 
-                    fontWeight: 600,
-                    color: statusColor,
-                    bgcolor: alpha(statusColor, 0.1),
-                    px: 1.5,
-                    py: 0.5,
-                    borderRadius: 1
-                  }}
-                >
-                  {percentage}%
-                </Typography>
-              )}
-            </Stack>
-          </Stack>
-          
-          <LinearProgress 
-            variant={status === 'starting' ? 'indeterminate' : 'determinate'}
-            value={percentage} 
-            sx={{ 
-              mt: 1.5, 
-              height: 8, 
-              borderRadius: 4,
-              bgcolor: alpha(statusColor, 0.1),
-              '& .MuiLinearProgress-bar': {
-                bgcolor: progressColor,
-                borderRadius: 4
-              }
-            }} 
-          />
-          
-          {status === 'completed' && (
-            <Box sx={{ mt: 1, display: 'flex', justifyContent: 'center' }}>
-              <Typography variant="caption" color="text.secondary">
-                This notification will disappear automatically
-              </Typography>
-            </Box>
-          )}
-        </Paper>
-      </Box>
-    </Fade>
+    <Box sx={{ px: { xs: 2, md: 3 }, pt: 1.5 }}>
+      <Paper sx={{ p: 2, border: '1px solid #e0e0e0' }}>
+        <Stack direction="row" alignItems="center" spacing={2}>
+          <CloudUpload sx={{ color: '#60a5fa' }} />
+          <Box sx={{ flex: 1 }}>
+            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+              {statusText}
+            </Typography>
+            <LinearProgress 
+              variant="determinate" 
+              value={percentage} 
+              sx={{ mt: 1, height: 8, borderRadius: 4 }} 
+            />
+          </Box>
+          <Button
+            variant="outlined"
+            color="error"
+            size="small"
+            onClick={handleCancel}
+            sx={{ minWidth: 'auto' }}
+          >
+            Cancel
+          </Button>
+        </Stack>
+      </Paper>
+    </Box>
   );
 });
-
-import uploadManager from '../services/uploadManager';
-
-// Animations
-const float = keyframes`
-  0%, 100% { transform: translateY(0px); }
-  50% { transform: translateY(-10px); }
-`;
-
-const glow = keyframes`
-  0%, 100% { opacity: 0.5; }
-  50% { opacity: 1; }
-`;
-
-const shimmer = keyframes`
-  0% { background-position: -1000px 0; }
-  100% { background-position: 1000px 0; }
-`;
-
-const snowfall = keyframes`
-  0% { transform: translateY(-10px); opacity: 0; }
-  50% { opacity: 1; }
-  100% { transform: translateY(10px); opacity: 0; }
-`;
-
-const wakeUp = keyframes`
-  0% { filter: brightness(0.5) blur(5px); }
-  100% { filter: brightness(1) blur(0px); }
-`;
-
-// File state configurations with thematic hibernation system
-const getFileStateConfig = (status) => {
-  const states = {
-    // 🟢 Primary — Awake ☀️
-    uploaded: {
-      label: 'Awake ☀️',
-      color: '#34d399',
-      icon: <WbSunny sx={{ fontSize: 16 }} />,
-      animation: null,
-      glow: false,
-      description: 'Your file is active and instantly accessible.',
-    },
-    // 🔵 Transitional (uploading) — Waking Up 🔄
-    uploading: {
-      label: 'Waking Up 🔄',
-      color: '#60a5fa',
-      icon: <Refresh sx={{ fontSize: 16 }} />,
-      animation: glow,
-      glow: true,
-      description: 'Your file is getting ready and uploading securely.',
-    },
-    // 🟣 Transitional (archiving) — Falling Asleep 🌙
-    archiving: {
-      label: 'Falling Asleep 🌙',
-      color: '#a78bfa',
-      icon: <Bedtime sx={{ fontSize: 16 }} />,
-      animation: glow,
-      glow: true,
-      description: 'Your file is going into hibernation to save cost.',
-    },
-    // 🔴 Archived — Hibernating ❄️
-    archived: {
-      label: 'Hibernating ❄️',
-      color: '#94a3b8',
-      icon: <AcUnit sx={{ fontSize: 16 }} />,
-      animation: snowfall,
-      glow: false,
-      description: 'Your file is sleeping safely at low cost.',
-    },
-    // 🟡 Transitional (restoring) — Waking from Sleep 🌅
-    restoring: {
-      label: 'Waking from Sleep 🌅',
-      color: '#fbbf24',
-      icon: <WbSunny sx={{ fontSize: 16 }} />,
-      animation: wakeUp,
-      glow: true,
-      description: 'Your file is waking up — this may take a few hours.',
-    },
-    // After restore finishes back to Awake
-    restored: {
-      label: 'Awake ☀️',
-      color: '#34d399',
-      icon: <WbSunny sx={{ fontSize: 16 }} />,
-      animation: null,
-      glow: false,
-      description: 'Your file is active and instantly accessible.',
-    },
-  };
-  return states[status] || states.uploaded;
-};
 
 const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery }) => {
   const theme = useTheme();
@@ -901,15 +666,15 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
   const handleBulkDelete = () => {
     const selectedFilesList = getSelectedFiles();
     const selectedFoldersList = getSelectedFolders();
-    
 
     if (selectedFilesList.length === 0 && selectedFoldersList.length === 0) {
       return;
     }
 
     // Count total files that will be deleted
+    // Use the fileCount property from the folder objects instead of filtering files client-side
     const folderFilesCount = selectedFoldersList.reduce((count, folder) => {
-      return count + files.filter(f => f.relative_path?.startsWith(folder.path)).length;
+      return count + (folder.fileCount || 0);
     }, 0);
     
     const totalCount = selectedFilesList.length + folderFilesCount;
@@ -927,12 +692,27 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
     
     // Collect all files to be deleted
     const allFilesToDelete = [...selectedFilesList];
+    
+    // For each selected folder, fetch all files within that folder
     for (const folder of selectedFoldersList) {
-      const folderFiles = files.filter(f => f.relative_path?.startsWith(folder.path));
-      allFilesToDelete.push(...folderFiles);
+      try {
+        console.log(`Fetching files for folder: ${folder.path}`);
+        const response = await mediaAPI.getFiles({
+          folder: folder.path,
+          paginate: false
+        });
+        
+        if (response.data && Array.isArray(response.data.files)) {
+          allFilesToDelete.push(...response.data.files);
+          console.log(`Found ${response.data.files.length} files in folder ${folder.path}`);
+        }
+      } catch (error) {
+        console.error(`Error fetching files for folder ${folder.path}:`, error);
+      }
     }
     
     const fileIds = allFilesToDelete.map(file => file.id);
+    console.log(`Total files to delete: ${fileIds.length}`);
     
     // Add delete operation to global upload manager
     const deleteOperationId = uploadManager.addDeleteOperation(fileIds, 'delete');
@@ -1058,7 +838,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
         // Remove completed delete operation from global manager
         uploadManager.queue = uploadManager.queue.filter(q => q.id !== deleteOperationId);
         uploadManager._emit();
-      }, 2000);
+      }, 500); // Reduced from 2000ms to 500ms for faster refresh
       
     } catch (error) {
       console.error('Bulk delete failed:', error);
@@ -1123,7 +903,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
           throttleTimer = setTimeout(() => {
             setUploadManagerState(state);
             throttleTimer = null;
-          }, 150); // 150ms throttle to reduce flickering
+          }, 500); // Reduced to 500ms for smoother updates
         }
       });
     });
@@ -2080,6 +1860,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
                   setOverallUploadProgress(0);
                   setOverallUploadLabel('');
                   loadFiles(); // Refresh the file list
+                  loadFolderStructure(); // Also refresh folder structure
                 }}
                 onUploadProgress={(progress, fileName) => {
                   setUploadProgress(prev => ({
@@ -2569,7 +2350,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
                   <Stack direction="row" alignItems="center" spacing={1} sx={{ mt: 0.5 }}>
                     <CloudUpload sx={{ color: '#60a5fa' }} />
                     <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                      {starting ? 'Starting uploads…' : `Uploading ${Math.max(total - completed, 0)} of ${total} files`}
+                      {starting ? 'Starting uploads…' : `Uploading ${Math.max(Math.floor((total - completed) / 100) * 100, 0)} of ${total} files`}
                     </Typography>
                   </Stack>
                   {starting ? (

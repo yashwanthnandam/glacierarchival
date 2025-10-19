@@ -7,19 +7,21 @@
 
 import indexedDBService from './indexedDBService';
 import { mediaAPI, uppyAPI } from './api';
+import { UPLOAD_CONFIG } from '../constants';
 
 class UploadManager {
   constructor() {
     this.queue = []; // [{ id, file, relativePath, status, progress, s3Key, error }]
     this.subscribers = new Set();
     this.isRunning = false;
-    this.concurrent = 3;
+    this.concurrent = UPLOAD_CONFIG.maxConcurrentUploads;
     this.activeCount = 0;
     this.initialized = false;
-    this._emitThrottled = this._throttle(this._emit.bind(this), 200);
+    this._emitThrottled = this._throttle(this._emit.bind(this), 200); // Restored to 200ms for smooth progress
     this.activeWorkers = new Set();
     this._uploadSessionActive = false; // Simple flag to prevent cleanup during uploads
     this._currentSessionTotal = 0; // Fixed total for current upload session
+    this._cumulativeCompleted = 0; // Track cumulative completed files across the session
   }
 
   // Throttle utility to limit function calls
@@ -137,7 +139,7 @@ class UploadManager {
         error: item.error
       }));
     
-    return {
+    const state = {
       isRunning: inProgress > 0,
       activeCount: inProgress,
       total: this.queue.length,
@@ -150,7 +152,7 @@ class UploadManager {
       uploadQueued,
       uploadInProgress,
       uploadFailed,
-      uploadCompleted,
+      uploadCompleted: this._uploadSessionActive ? this._cumulativeCompleted : uploadCompleted,
       items: recentItems,
       deleteOperations: recentDeleteOperations,
       deleteOperationsCount: deleteOps,
@@ -158,6 +160,8 @@ class UploadManager {
       totalSize,
       percentage: this.queue.length > 0 ? Math.round((completed / this.queue.length) * 100) : 0
     };
+    
+    return state;
   }
 
   // Simple cleanup - only run when no uploads are active
@@ -183,13 +187,37 @@ class UploadManager {
 
   // Simple upload session control
   startUploadSession(totalFiles) { 
-    this._uploadSessionActive = true; 
+    this._uploadSessionActive = true;
     this._currentSessionTotal = totalFiles; // Set stable total at start
+    this._cumulativeCompleted = 0; // Reset cumulative completed counter
   }
-  endUploadSession() { 
+  async endUploadSession() { 
     this._uploadSessionActive = false; 
     this._currentSessionTotal = 0; // Reset stable total
+    this._cumulativeCompleted = 0; // Reset cumulative completed counter
+    
+    // Mark upload as complete and invalidate cache
+    try {
+      const completedFileIds = this.queue
+        .filter(item => item.status === 'completed' && item.fileId)
+        .map(item => item.fileId);
+      
+      if (completedFileIds.length > 0) {
+        const { mediaAPI } = await import('./api');
+        await mediaAPI.markUploadComplete(completedFileIds);
+        console.log(`Marked ${completedFileIds.length} files as upload complete`);
+      }
+    } catch (error) {
+      console.error('Failed to mark upload as complete:', error);
+    }
+    
     this._cleanupCompletedItems(); // Cleanup after upload ends
+  }
+
+  // Method to increment cumulative completed counter (for Web Worker uploads)
+  incrementCompleted() {
+    this._cumulativeCompleted += 1;
+    this._emitThrottled();
   }
 
   // External linkage: allow UI-managed uploads to surface progress in the global queue
@@ -392,19 +420,24 @@ class UploadManager {
     item.status = 'uploading';
     item.progress = 0;
     await this._persistItem(item);
-    this._emit();
+    this._emitThrottled(); // Use throttled emit to reduce flickering
 
     try {
-      // Get presigned URL and final key from backend
-      const presigned = await uppyAPI.getPresignedUrl({
-        filename: item.file.name,
-        fileType: item.file.type || 'application/octet-stream',
-        fileSize: item.file.size || 0,
-        relativePath: item.relativePath || '',
+      // Use the updated get_presigned_urls endpoint that supports bulk
+      const presigned = await mediaAPI.getPresignedUrls({
+        files: [{
+          filename: item.file.name,
+          fileType: item.file.type || 'application/octet-stream',
+          fileSize: item.file.size || 0,
+          relativePath: item.relativePath || '',
+        }]
       });
 
-      const { url, fields } = presigned.presignedUrl || {};
-      const s3Key = presigned.s3Key;
+      // Handle bulk response format
+      const result = presigned.data.results[0];
+      const { url, fields } = result.presignedUrl || {};
+      const s3Key = result.s3Key;
+      const fileId = result.fileId;
 
       // Upload via presigned POST
       const formData = new FormData();
@@ -416,28 +449,149 @@ class UploadManager {
         this._emitThrottled();
       });
 
-      // Notify backend upload complete
-      await uppyAPI.markUploadComplete({ fileId: presigned.fileId, s3Key, etag: '' });
-
+      // Mark as completed (file record already created by bulk endpoint)
       item.status = 'completed';
       item.progress = 100;
       item.s3Key = s3Key;
+      item.fileId = fileId; // Store fileId for cache invalidation
       await this._persistItem(item);
-      this._emit();
+      this._emitThrottled(); // Use throttled emit to reduce flickering
+      
+      // Increment cumulative completed counter
+      this._cumulativeCompleted += 1;
     } catch (e) {
       item.status = 'failed';
       item.error = e?.message || String(e);
       await this._persistItem(item);
-      this._emit();
+      this._emitThrottled(); // Use throttled emit to reduce flickering
     } finally {
       this.activeCount -= 1;
       // Auto-remove completed from queue after short delay
       if (item.status === 'completed') {
         await indexedDBService.removeQueuedUpload(item.id);
         this.queue = this.queue.filter((q) => q.id !== item.id);
-        this._emit();
+        this._emitThrottled(); // Use throttled emit to reduce flickering
       }
       if (this.isRunning) this._tick();
+    }
+  }
+
+  // Bulk upload method using the updated get_presigned_urls endpoint
+  async bulkUpload(files, relativePath = '') {
+    await this.init();
+    
+    if (files.length === 0) return;
+    
+    // Start upload session
+    this.startUploadSession(files.length);
+    
+    try {
+      // Process files in batches to avoid overwhelming the API
+      const batchSize = UPLOAD_CONFIG.bulkBatchSize;
+      const batches = [];
+      
+      for (let i = 0; i < files.length; i += batchSize) {
+        batches.push(files.slice(i, i + batchSize));
+      }
+      
+      console.log(`Processing ${files.length} files in ${batches.length} batches of ${batchSize}`);
+      
+      // Process each batch
+      for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+        const batch = batches[batchIndex];
+        
+        // Prepare file metadata for bulk presigned URL request
+        const fileMetadata = batch.map(file => ({
+          filename: file.name,
+          fileType: file.type || 'application/octet-stream',
+          fileSize: file.size || 0,
+          relativePath: relativePath
+        }));
+        
+        // Get bulk presigned URLs for this batch
+        const bulkResponse = await mediaAPI.getPresignedUrls({
+          files: fileMetadata
+        });
+        const { results } = bulkResponse.data;
+        
+        // Create upload items for each file in this batch
+        const uploadItems = batch.map((file, index) => {
+          const id = `bulk_${Date.now()}_${batchIndex}_${index}_${Math.random().toString(16).slice(2)}`;
+          const result = results[index];
+          
+          return {
+            id,
+            file,
+            relativePath,
+            status: 'queued',
+            progress: 0,
+            s3Key: result.s3Key,
+            presignedUrl: result.presignedUrl,
+            fileId: result.fileId,
+            error: undefined,
+            operationType: 'upload'
+          };
+        });
+        
+        // Add batch items to queue
+        this.queue.push(...uploadItems);
+        this._emitThrottled(); // Use throttled emit for better performance
+        
+        // Small delay between batches to prevent overwhelming the API
+        if (batchIndex < batches.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+      
+      // Start uploading files concurrently (they're already in the queue)
+      this.start();
+      
+    } catch (error) {
+      console.error('Bulk upload failed:', error);
+      // Mark all items as failed
+      this.queue.forEach(item => {
+        if (item.operationType === 'upload' && item.status === 'queued') {
+          item.status = 'failed';
+          item.error = error.message || 'Bulk upload failed';
+        }
+      });
+      this._emit();
+    } finally {
+      this.endUploadSession();
+    }
+  }
+
+  async _bulkUploadItem(item) {
+    item.status = 'uploading';
+    item.progress = 0;
+    this._emit();
+
+    try {
+      const { url, fields } = item.presignedUrl || {};
+      
+      if (!url || !fields) {
+        throw new Error('Invalid presigned URL response');
+      }
+
+      // Upload via presigned POST
+      const formData = new FormData();
+      Object.entries(fields).forEach(([k, v]) => formData.append(k, v));
+      formData.append('file', item.file);
+
+      await this._xhrPost(url, formData, (pct) => {
+        item.progress = pct;
+        this._emitThrottled();
+      });
+
+      // Mark as completed
+      item.status = 'completed';
+      item.progress = 100;
+      this._emit();
+      
+    } catch (error) {
+      item.status = 'failed';
+      item.error = error.message || 'Upload failed';
+      this._emit();
     }
   }
 
@@ -482,7 +636,7 @@ class UploadManager {
     this._throttleTimer = setTimeout(() => {
       this._throttleTimer = null;
       this._emit();
-    }, 200); // Increased to 200ms to reduce screen refresh frequency
+    }, 200); // Restored to 200ms for smooth progress updates
   }
 }
 

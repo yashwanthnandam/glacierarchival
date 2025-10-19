@@ -136,7 +136,35 @@ export const mediaAPI = {
   createFolder: (folderName, parentPath = '') => api.post('create-folder/', { 
     folder_name: folderName, 
     parent_path: parentPath 
-  })
+  }),
+  
+  // Get presigned URLs - supports both single file and bulk uploads
+  getPresignedUrls: (data) => {
+    // Create a separate axios instance with longer timeout for bulk operations
+    const presignedApi = axios.create({
+      ...API_CONFIG,
+      timeout: 60000, // 1 minute for bulk presigned URL generation
+    });
+    
+    // Add auth interceptor
+    presignedApi.interceptors.request.use(
+      config => {
+        const authHeaders = secureTokenStorage.getAuthHeaders();
+        Object.assign(config.headers, authHeaders);
+        return config;
+      },
+      error => Promise.reject(error)
+    );
+    
+    return presignedApi.post('media-files/get_presigned_urls/', data);
+  },
+
+  // Mark upload as complete and invalidate cache
+  markUploadComplete: (fileIds) => {
+    return api.post('media-files/mark_upload_complete/', {
+      file_ids: fileIds
+    });
+  }
 };
 
 export const jobAPI = {

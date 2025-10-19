@@ -25,6 +25,137 @@ from .utils import validate_file_size, calculate_file_checksum, sanitize_filenam
 from .error_handling import handle_api_error, validate_required_fields, validate_file_upload, create_success_response, create_error_response
 from .constants import EMAIL_VERIFICATION_EXPIRY_HOURS
 
+# Cache configuration constants
+CACHE_TIMEOUTS = {
+    'files_list': 300,        # 5 minutes
+    'folder_structure': 600,  # 10 minutes  
+    'user_version': 86400,    # 24 hours
+    'cost_snapshot': 3600,    # 1 hour
+}
+
+def atomic_cache_version_increment(user_id):
+    """
+    Atomically increment cache version for a user to prevent race conditions.
+    Returns the new version number.
+    """
+    cache_version_key = f"user_cache_version_{user_id}"
+    
+    try:
+        # Try atomic increment first (works with Redis)
+        new_version = cache.incr(cache_version_key)
+    except (AttributeError, TypeError):
+        # Fallback for non-Redis backends - use get-set-check pattern
+        max_retries = 5
+        for attempt in range(max_retries):
+            current_version = cache.get(cache_version_key, 0)
+            new_version = current_version + 1
+            
+            # Try to set only if version hasn't changed
+            if cache.add(f"{cache_version_key}_lock", "1", 1):  # 1 second lock
+                try:
+                    # Double-check version hasn't changed
+                    check_version = cache.get(cache_version_key, 0)
+                    if check_version == current_version:
+                        cache.set(cache_version_key, new_version, CACHE_TIMEOUTS['user_version'])
+                        break
+                    else:
+                        # Version changed, retry
+                        current_version = check_version
+                        new_version = current_version + 1
+                        cache.set(cache_version_key, new_version, CACHE_TIMEOUTS['user_version'])
+                        break
+                finally:
+                    cache.delete(f"{cache_version_key}_lock")
+            else:
+                # Lock failed, wait and retry
+                time.sleep(0.01 * (attempt + 1))
+        else:
+            # Max retries exceeded, use simple increment
+            current_version = cache.get(cache_version_key, 0)
+            new_version = current_version + 1
+            cache.set(cache_version_key, new_version, CACHE_TIMEOUTS['user_version'])
+    
+    return new_version
+
+def clear_user_cache_patterns(user_id):
+    """
+    Clear all cache patterns for a user using dynamic pattern matching.
+    This is a secondary cleanup after cache versioning.
+    """
+    try:
+        # Define cache key patterns for this user
+        patterns_to_clear = [
+            # File listing patterns
+            f"files_{user_id}_*",
+            f"folder_structure_{user_id}*",
+            f"cost_snapshot:{user_id}*",
+            
+            # Rate limiting patterns
+            f"rate_limit_{user_id}_*",
+            f"rate_limit_user_{user_id}*",
+            f"concurrent_uploads_{user_id}*",
+            
+            # Any other user-specific patterns
+            f"*_{user_id}_*",
+        ]
+        
+        # For Redis backend, use pattern deletion
+        if hasattr(cache, 'delete_pattern'):
+            # Redis supports pattern deletion
+            for pattern in patterns_to_clear:
+                try:
+                    cache.delete_pattern(pattern)
+                    print(f"Cleared cache pattern: {pattern}")
+                except Exception as e:
+                    print(f"Failed to clear pattern {pattern}: {e}")
+        else:
+            # For non-Redis backends, clear known specific keys
+            specific_keys = [
+                f"folder_structure_{user_id}",
+                f"cost_snapshot:{user_id}",
+                f"rate_limit_{user_id}_upload",
+                f"rate_limit_{user_id}_file_ops",
+                f"concurrent_uploads_{user_id}",
+            ]
+            
+            # Add common file listing variations
+            common_variations = [
+                f"files_{user_id}_root__true_1_50",
+                f"files_{user_id}_root__true_1_100",
+                f"files_{user_id}_root__false",
+                f"files_{user_id}_root__true_1_25",
+                f"files_{user_id}_root__true_2_50",
+                f"files_{user_id}_root__true_2_100",
+            ]
+            
+            specific_keys.extend(common_variations)
+            
+            # Clear specific keys
+            cache.delete_many(specific_keys)
+            print(f"Cleared {len(specific_keys)} specific cache keys for user {user_id}")
+            
+    except Exception as e:
+        print(f"Cache pattern clearing error for user {user_id}: {e}")
+
+def invalidate_user_cache(user_id, reason="general"):
+    """
+    Comprehensive cache invalidation for a user.
+    This is the main function to call when user data changes.
+    """
+    try:
+        # Primary: Increment cache version (invalidates ALL cached data)
+        new_version = atomic_cache_version_increment(user_id)
+        print(f"Cache version incremented for user {user_id}: {new_version} (reason: {reason})")
+        
+        # Secondary: Clear specific patterns for immediate cleanup
+        clear_user_cache_patterns(user_id)
+        
+        return new_version
+        
+    except Exception as e:
+        print(f"Cache invalidation error for user {user_id}: {e}")
+        return None
+
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
 def register_user(request):
@@ -240,8 +371,9 @@ class MediaFileViewSet(viewsets.ModelViewSet):
         page = int(request.query_params.get('page', 1))
         page_size = int(request.query_params.get('page_size', 50))
         
-        # Create cache key
-        cache_key = f"files_{user_id}_{folder_path}_{search_query}_{paginate}_{page}_{page_size}"
+        # Create cache key with version for cache invalidation
+        cache_version = cache.get(f"user_cache_version_{user_id}", 0)
+        cache_key = f"files_{user_id}_{folder_path}_{search_query}_{paginate}_{page}_{page_size}_v{cache_version}"
         
         # Try to get from cache first
         cached_result = cache.get(cache_key)
@@ -260,11 +392,9 @@ class MediaFileViewSet(viewsets.ModelViewSet):
         # Filter by folder if specified
         folders_data = []
         if folder_path:
-            print(f"DEBUG: Filtering by folder_path: '{folder_path}'")
             if folder_path == 'root':
                 # Root files (no relative_path or relative_path is empty)
                 queryset = queryset.filter(Q(relative_path__isnull=True) | Q(relative_path=''))
-                print(f"DEBUG: Root filter applied, count: {queryset.count()}")
                 
                 # Also get folders in root (top-level directories)
                 all_files = MediaFile.objects.filter(user_id=user_id, is_deleted=False).exclude(
@@ -289,13 +419,9 @@ class MediaFileViewSet(viewsets.ModelViewSet):
                         'size': dir_size,
                         'relative_path': dir_name
                     })
-                print(f"DEBUG: Found {len(folders_data)} folders in root")
             else:
                 # Files in specific folder (non-recursive immediate folder scope)
                 queryset = queryset.filter(Q(relative_path=folder_path) | Q(relative_path__startswith=f"{folder_path}/"))
-                print(f"DEBUG: Folder filter applied for '{folder_path}', count: {queryset.count()}")
-        else:
-            print("DEBUG: No folder filter applied")
 
         # Apply search filter if provided
         if search_query:
@@ -346,7 +472,7 @@ class MediaFileViewSet(viewsets.ModelViewSet):
             }
         
         # Cache for 5 minutes
-        cache.set(cache_key, result, 300)
+        cache.set(cache_key, result, CACHE_TIMEOUTS['files_list'])
         
         return Response(result)
 
@@ -354,7 +480,9 @@ class MediaFileViewSet(viewsets.ModelViewSet):
     def folder_structure(self, request):
         """Get folder structure without loading all files"""
         user_id = request.user.id
-        cache_key = f"folder_structure_{user_id}"
+        # Create cache key with version for cache invalidation
+        cache_version = cache.get(f"user_cache_version_{user_id}", 0)
+        cache_key = f"folder_structure_{user_id}_v{cache_version}"
         
         # Try cache first
         cached_result = cache.get(cache_key)
@@ -422,7 +550,7 @@ class MediaFileViewSet(viewsets.ModelViewSet):
                     current['size'] += folder['total_size'] or 0
         
         # Cache for 10 minutes
-        cache.set(cache_key, folder_tree, 600)
+        cache.set(cache_key, folder_tree, CACHE_TIMEOUTS['folder_structure'])
         
         return Response(folder_tree)
 
@@ -507,8 +635,99 @@ class MediaFileViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['post'], parser_classes=[JSONParser])
     def get_presigned_urls(self, request):
-        """Get presigned URLs for uploading chunks"""
+        """Get presigned URLs for uploading files - supports both single file and bulk uploads"""
         try:
+            # Check if this is a bulk upload request
+            files = request.data.get('files', [])
+            if files:
+                # Bulk upload mode - generate presigned URLs for multiple files
+                if len(files) > 1000:  # Process in chunks
+                    return Response({'error': 'Max 1000 files per batch'}, 
+                                  status=status.HTTP_400_BAD_REQUEST)
+                
+                # Get S3 client once
+                s3_service = S3Service(request.user)
+                s3_client = s3_service.s3_client
+                bucket_name = s3_service.s3_config.bucket_name
+                
+                results = []
+                uploaded_files = []
+                
+                # Generate all presigned URLs
+                for file_data in files:
+                    file_name = file_data.get('filename')
+                    file_type = file_data.get('fileType', 'application/octet-stream')
+                    file_size = file_data.get('fileSize', 0)
+                    relative_path = file_data.get('relativePath', '')
+                    
+                    # Generate S3 key
+                    timestamp = timezone.now().strftime('%Y/%m/%d')
+                    unique_id = str(uuid.uuid4())[:8]
+                    
+                    def sanitize_segment(seg: str) -> str:
+                        if not seg:
+                            return seg
+                        seg = seg.strip().lower().replace('(', '-').replace(')', '-').replace(' ', '-')
+                        return seg.strip('-')
+                    
+                    sanitized_filename = sanitize_segment(file_name)
+                    sanitized_relpath = '/'.join(
+                        sanitize_segment(p) for p in (relative_path or '').split('/') if p and p != '.'
+                    )
+                    
+                    base_prefix = f"uploads/{request.user.username}/{timestamp}"
+                    if sanitized_relpath:
+                        s3_key = f"{base_prefix}/{sanitized_relpath}/{unique_id}_{sanitized_filename}"
+                    else:
+                        s3_key = f"{base_prefix}/{unique_id}_{sanitized_filename}"
+                    
+                    # Generate presigned URL
+                    presigned_url = s3_client.generate_presigned_post(
+                        Bucket=bucket_name,
+                        Key=s3_key,
+                        Fields={'Content-Type': file_type},
+                        Conditions=[
+                            {'Content-Type': file_type},
+                            ['content-length-range', 0, file_size]
+                        ],
+                        ExpiresIn=7200
+                    )
+                    
+                    # Create file record (prepare for bulk insert)
+                    uploaded_files.append(MediaFile(
+                        user=request.user,
+                        original_filename=file_name,
+                        file_size=file_size,
+                        file_type=file_type,
+                        relative_path=sanitized_relpath,
+                        s3_key=s3_key,
+                        status='uploaded'
+                    ))
+                    
+                    results.append({
+                        'filename': file_name,
+                        'presignedUrl': presigned_url,
+                        's3Key': s3_key
+                    })
+                
+                # Bulk insert all file records at once
+                created_files = MediaFile.objects.bulk_create(uploaded_files)
+                
+                # Add fileId to results
+                for i, result in enumerate(results):
+                    result['fileId'] = str(created_files[i].id)
+                
+                # NOTE: Cache invalidation moved to mark_upload_complete endpoint
+                # This prevents premature cache invalidation before S3 uploads complete
+                
+                return Response({
+                    'results': results,
+                    'count': len(results),
+                    'success': True,
+                    'mode': 'bulk'
+                })
+            
+            # Legacy single file mode - for multipart uploads
             upload_id = request.data.get('upload_id')
             s3_key = request.data.get('s3_key')
             chunk_count = request.data.get('chunk_count')
@@ -532,10 +751,14 @@ class MediaFileViewSet(viewsets.ModelViewSet):
             return Response({
                 'presigned_urls': presigned_urls,
                 'upload_id': upload_id,
-                's3_key': s3_key
+                's3_key': s3_key,
+                'mode': 'multipart'
             })
             
         except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Presigned URL generation failed: {str(e)}")
             return Response({'error': f'Failed to generate presigned URLs: {str(e)}'}, 
                           status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
@@ -976,6 +1199,18 @@ class MediaFileViewSet(viewsets.ModelViewSet):
                         'error': str(e)
                     })
             
+            # Invalidate cache after successful deletion
+            try:
+                user_id = request.user.id
+                new_version = invalidate_user_cache(user_id, reason="delete_all")
+                if new_version:
+                    print(f"Successfully invalidated cache for user {user_id} after delete all")
+                else:
+                    print(f"Cache invalidation failed for user {user_id}")
+            except Exception as cache_error:
+                print(f"Cache invalidation error during delete all: {cache_error}")
+                # Don't fail the delete operation if cache clearing fails
+            
             return Response({
                 'message': f'Delete all completed: {deleted_count} files deleted',
                 'deleted_count': deleted_count,
@@ -1036,6 +1271,18 @@ class MediaFileViewSet(viewsets.ModelViewSet):
             media_file.is_deleted = True
             media_file.deleted_at = timezone.now()
             media_file.save()
+            
+            # Invalidate cache after successful deletion
+            try:
+                user_id = request.user.id
+                new_version = invalidate_user_cache(user_id, reason="single_delete")
+                if new_version:
+                    print(f"Successfully invalidated cache for user {user_id} after single file delete")
+                else:
+                    print(f"Cache invalidation failed for user {user_id}")
+            except Exception as cache_error:
+                print(f"Cache invalidation error during single delete: {cache_error}")
+                # Don't fail the delete operation if cache clearing fails
             
             return Response({
                 'message': f'File "{filename}" deleted successfully',
@@ -1198,6 +1445,21 @@ class MediaFileViewSet(viewsets.ModelViewSet):
             print(f"Database records updated: {deleted_count}")
             print(f"==========================")
             
+            # Clear cache for this user to ensure folder structure updates
+            user_id = request.user.id
+            
+            try:
+                # Use comprehensive cache invalidation
+                new_version = invalidate_user_cache(user_id, reason="bulk_delete")
+                if new_version:
+                    print(f"Successfully invalidated cache for user {user_id} after bulk delete")
+                else:
+                    print(f"Cache invalidation failed for user {user_id}")
+                
+            except Exception as cache_error:
+                print(f"Cache clearing error: {cache_error}")
+                # Don't fail the delete operation if cache clearing fails
+            
             return Response({
                 'message': f'Bulk delete completed',
                 'summary': {
@@ -1212,6 +1474,134 @@ class MediaFileViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({
                 'error': f'Bulk delete failed: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated])
+    def mark_upload_complete(self, request):
+        """Mark bulk upload as complete and invalidate cache"""
+        user_id = request.user.id
+        file_ids = request.data.get('file_ids', [])
+        
+        try:
+            # Validate that all files belong to the user
+            if file_ids:
+                user_files = MediaFile.objects.filter(
+                    id__in=file_ids, 
+                    user_id=user_id
+                ).count()
+                
+                if user_files != len(file_ids):
+                    return Response({
+                        'error': 'Some files do not belong to the user'
+                    }, status=status.HTTP_403_FORBIDDEN)
+            
+            # Comprehensive cache invalidation
+            new_version = invalidate_user_cache(user_id, reason="upload_complete")
+            
+            return Response({
+                'message': 'Upload marked as complete and cache invalidated',
+                'new_version': new_version,
+                'files_processed': len(file_ids)
+            })
+        except Exception as cache_error:
+            return Response({
+                'error': f'Cache invalidation error: {cache_error}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['post'], parser_classes=[JSONParser])
+    def clear_cache(self, request):
+        """Clear all cache for the current user - useful for debugging"""
+        try:
+            user_id = request.user.id
+            
+            # Comprehensive cache invalidation
+            new_version = invalidate_user_cache(user_id, reason="manual_clear")
+            
+            return Response({
+                'message': f'Cache cleared for user {user_id}',
+                'cache_version': f'{new_version - 1 if new_version else "unknown"} -> {new_version if new_version else "failed"}'
+            })
+            
+        except Exception as e:
+            return Response({
+                'error': f'Cache clear failed: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['post'], parser_classes=[JSONParser])
+    def clear_cache_patterns(self, request):
+        """Clear specific cache patterns for debugging and maintenance"""
+        try:
+            user_id = request.user.id
+            patterns = request.data.get('patterns', [])
+            
+            if not patterns:
+                return Response({
+                    'error': 'No patterns provided'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            cleared_count = 0
+            cleared_patterns = []
+            
+            for pattern in patterns:
+                try:
+                    if hasattr(cache, 'delete_pattern'):
+                        # Redis pattern deletion
+                        cache.delete_pattern(pattern)
+                        cleared_patterns.append(pattern)
+                        cleared_count += 1
+                    else:
+                        # Non-Redis: try to delete as specific key
+                        cache.delete(pattern)
+                        cleared_patterns.append(pattern)
+                        cleared_count += 1
+                except Exception as e:
+                    print(f"Failed to clear pattern {pattern}: {e}")
+            
+            return Response({
+                'message': f'Cleared {cleared_count} cache patterns',
+                'cleared_patterns': cleared_patterns,
+                'total_requested': len(patterns)
+            })
+            
+        except Exception as e:
+            return Response({
+                'error': f'Pattern clearing failed: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
+    def cache_status(self, request):
+        """Get cache status and statistics for debugging"""
+        try:
+            user_id = request.user.id
+            
+            # Get current cache version
+            cache_version = cache.get(f"user_cache_version_{user_id}", 0)
+            
+            # Check if Redis is available
+            cache_backend = "Redis" if hasattr(cache, 'delete_pattern') else "Local Memory"
+            
+            # Sample some cache keys
+            sample_keys = [
+                f"folder_structure_{user_id}",
+                f"cost_snapshot:{user_id}",
+                f"files_{user_id}_root__true_1_50",
+            ]
+            
+            key_status = {}
+            for key in sample_keys:
+                key_status[key] = "exists" if cache.get(key) is not None else "not_found"
+            
+            return Response({
+                'user_id': user_id,
+                'cache_backend': cache_backend,
+                'cache_version': cache_version,
+                'sample_keys_status': key_status,
+                'timestamp': timezone.now().isoformat()
+            })
+            
+        except Exception as e:
+            return Response({
+                'error': f'Cache status check failed: {str(e)}'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class ArchiveJobViewSet(viewsets.ReadOnlyModelViewSet):

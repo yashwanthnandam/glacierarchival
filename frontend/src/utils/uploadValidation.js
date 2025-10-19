@@ -99,7 +99,7 @@ export const validateFileCollection = (files) => {
     warnings.push({
       type: 'MEMORY_LIMIT_WARNING',
       message: 'Large upload detected',
-      details: `Total size is ${formatBytes(totalSize)}. This may cause performance issues. Consider uploading in smaller batches.`
+      details: `Uploading ${formatBytes(totalSize)}. This may take a while.`
     });
   }
 
@@ -249,7 +249,7 @@ export const validateUploadSession = (sessionData) => {
 /**
  * Check for concurrent upload limits
  */
-export const checkConcurrentUploads = (activeUploads, maxConcurrent = 3) => {
+export const checkConcurrentUploads = (activeUploads, maxConcurrent = 8) => {
   if (activeUploads >= maxConcurrent) {
     return {
       canStart: false,

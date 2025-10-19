@@ -17,7 +17,9 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
-  Divider
+  Divider,
+  Stack,
+  Paper
 } from '@mui/material';
 import {
   CloudUpload,
@@ -33,7 +35,7 @@ import {
   LockOpen
 } from '@mui/icons-material';
 import StorageLimitError from './StorageLimitError';
-import { uppyAPI } from '../services/api';
+import { uppyAPI, mediaAPI } from '../services/api';
 import uploadManager from '../services/uploadManager';
 import secureTokenStorage from '../utils/secureTokenStorage';
 import { 
@@ -43,7 +45,7 @@ import {
   getUploadStrategy,
   formatBytes 
 } from '../utils/uploadValidation';
-import { FILE_UPLOAD, API_CONFIG } from '../constants';
+import { FILE_UPLOAD, API_CONFIG, UPLOAD_CONFIG } from '../constants';
 import encryptionService from '../services/encryptionService';
 import analyticsService from '../services/analyticsService';
 import { captureException, addBreadcrumb } from '../services/sentryService';
@@ -236,7 +238,7 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
       // Progressive file processing for better UI responsiveness
       const processFilesProgressively = async (files) => {
     const fileMap = new Map();
-      const batchSize = 500; // Process 500 files at a time
+      const batchSize = UPLOAD_CONFIG.mainBatchSize; // Use optimized batch size
       const totalFiles = files.length;
       
       for (let i = 0; i < totalFiles; i += batchSize) {
@@ -310,15 +312,25 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
     }
   }, [defaultRelativePath]);
 
-  // Handle drag and drop
+  // Enhanced drag and drop with visual feedback
+  const [isDragOver, setIsDragOver] = useState(false);
+
   const handleDragOver = useCallback((e) => {
     e.preventDefault();
     e.stopPropagation();
+    setIsDragOver(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
   }, []);
 
   const handleDrop = useCallback((e) => {
     e.preventDefault();
     e.stopPropagation();
+    setIsDragOver(false);
     
     // Prevent drag & drop during upload
     if (uploadInProgressRef.current || isUploading) {
@@ -336,7 +348,7 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
 
     if (hasDirectories) {
       // Handle directory drop - this is complex, so we'll prompt user to use directory button
-      setUploadStatus('Please use "Select Directory" button for directory uploads');
+      setUploadStatus('Please use "Select Folder" button for directory uploads');
       return;
     }
 
@@ -511,24 +523,26 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
         }
       }
       
-      // Get presigned URL with simple retry
+      // Use the new bulk presigned URL endpoint (even for single files)
       const presignedResponse = await retryOperation(async () => {
         if (controller.signal.aborted) {
           const abortErr = new Error('Upload cancelled');
           abortErr.name = 'AbortError';
           throw abortErr;
         }
-        return await uppyAPI.getPresignedUrl({
-        filename: fileData.name,
-        fileType: fileToUpload.type,
-        fileSize: fileToUpload.size,
-        sessionId: sessionId,
-        relativePath: fileData.relativePath,
-        encryptionMetadata: encryptionMetadata
+        return await mediaAPI.getPresignedUrls({
+          files: [{
+            filename: fileData.name,
+            fileType: fileToUpload.type,
+            fileSize: fileToUpload.size,
+            relativePath: fileData.relativePath
+          }]
         });
       });
 
-      const { presignedUrl, fileId } = presignedResponse.data;
+      // Handle bulk response format (single file in results array)
+      const result = presignedResponse.data.results[0];
+      const { presignedUrl, s3Key, fileId } = result;
 
       // Upload to S3
       const formData = new FormData();
@@ -557,19 +571,8 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
         throw new Error(`Upload failed: ${uploadResponse.status}`);
       }
 
-      // Mark upload complete with simple retry
-      await retryOperation(async () => {
-        if (controller.signal.aborted) {
-          const abortErr = new Error('Upload cancelled');
-          abortErr.name = 'AbortError';
-          throw abortErr;
-        }
-        return await uppyAPI.markUploadComplete({
-        fileId,
-        s3Key: presignedUrl.fields.key,
-        etag: uploadResponse.headers.get('ETag')
-      });
-      }, 3, 500);
+      // File record is already created by the bulk endpoint, no need to call markUploadComplete
+      // The bulk endpoint creates the MediaFile record during presigned URL generation
 
       return {
         success: true,
@@ -795,7 +798,7 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
 
   // Streaming upload directly from file structure (zero memory overhead)
   const uploadWithWebWorkersStreamingFromStructure = async (filesStructure, sessionId, totalFiles, controller) => {
-    const batchSize = 100; // Process 100 files at a time
+    const batchSize = UPLOAD_CONFIG.webWorkerBatchSize; // Use optimized Web Worker batch size
     let processedFiles = 0;
     
     // Process each directory's files in batches
@@ -824,9 +827,12 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
         // Create placeholders for this batch only
         const batchPlaceholderIds = await createPlaceholdersProgressively(batchFilesForUpload);
         
-        // Update progress
+        // Update progress (throttled to prevent flickering)
         processedFiles += batchFiles.length;
-        setUploadStatus(`Uploading ${processedFiles}/${totalFiles} files (${Math.round(processedFiles/totalFiles*100)}%)`);
+        // Only update status every 50 files to reduce flickering
+        if (processedFiles % 50 === 0 || processedFiles === totalFiles) {
+          setUploadStatus(`Uploading ${processedFiles}/${totalFiles} files (${Math.round(processedFiles/totalFiles*100)}%)`);
+        }
         
         // Process this batch
         await uploadBatchWithWebWorker(batchFilesForUpload, sessionId, controller, batchPlaceholderIds);
@@ -843,7 +849,7 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
 
   // Streaming upload with Web Workers (memory-efficient for large file sets)
   const uploadWithWebWorkersStreaming = async (allFiles, sessionId, totalFiles, controller, placeholderIds) => {
-    const batchSize = 100; // Process 100 files at a time to limit memory usage
+    const batchSize = UPLOAD_CONFIG.webWorkerBatchSize; // Use optimized Web Worker batch size to limit memory usage
     const totalBatches = Math.ceil(allFiles.length / batchSize);
     
     for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
@@ -896,7 +902,7 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
         type: 'upload',
         files: batchFiles,
         sessionId: sessionId,
-        batchSize: 50,
+        batchSize: UPLOAD_CONFIG.webWorkerBatchSize,
         accessToken: secureTokenStorage.getAccessToken(),
         apiBaseUrl: API_CONFIG.baseURL.replace('/api/', '/api')
       });
@@ -953,6 +959,8 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
                   status: 'completed', 
                   progress: 100 
                 });
+                // Increment the global progress counter for each successful upload
+                uploadManager.incrementCompleted();
               } else {
                 uploadManager.updatePlaceholder(batchPlaceholderIds[index], { 
                   status: result.error === 'Upload cancelled' ? 'cancelled' : 'failed', 
@@ -1036,7 +1044,7 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
         type: 'upload',
         files: allFiles,
         sessionId: sessionId,
-        batchSize: 50, // Increased from 10 to 50 for better performance
+        batchSize: UPLOAD_CONFIG.webWorkerBatchSize, // Increased from 10 to 50 for better performance
         accessToken: secureTokenStorage.getAccessToken(),
         apiBaseUrl: API_CONFIG.baseURL.replace('/api/', '/api')
       });
@@ -1059,119 +1067,42 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
       let allResults = [];
       
       worker.onmessage = (e) => {
-        console.log('Web Worker message received:', e.data);
         const { type, data } = e.data;
-        const completed = data?.completed || 0;
-        const total = data?.total || 0;
-        const batchResults = data?.results || [];
         
         if (type === 'progress') {
-          // Prevent division by zero and ensure valid progress
+          const completed = data?.completed || 0;
+          const total = data?.total || 0;
           const progress = total > 0 ? Math.min(100, Math.max(0, (completed / total) * 100)) : 0;
-          
-          console.log(`Progress update: ${completed}/${total} = ${progress.toFixed(2)}%`);
           setUploadProgress(progress);
-          setUploadStatus(`Uploading ${completed}/${total} files... (Web Workers)`);
           
-          // Process batch results to update placeholder statuses
-          if (batchResults && batchResults.length > 0) {
-            batchResults.forEach((result, index) => {
-              const placeholderId = batchPlaceholderIds[completed - batchResults.length + index];
-              if (placeholderId) {
-            if (result.success) {
-                  uploadManager.updatePlaceholder(placeholderId, { 
-                    status: 'completed', 
-                    progress: 100 
-                  });
-            } else {
-                  uploadManager.updatePlaceholder(placeholderId, { 
-                    status: result.error === 'Upload cancelled' ? 'cancelled' : 'failed', 
-                    progress: 0, 
-                    error: result.error 
-                  });
-                }
-              }
-            });
-          }
-          
-          // Batch update placeholders - update every 10 files for smooth progress tracking
-          const updateInterval = 10; // Update every 10 files for responsive progress
-          const shouldUpdate = completed % updateInterval === 0 || completed === total || completed <= 10; // Always update first 10 files
-          console.log(`Progress update: completed=${completed}, total=${total}, updateInterval=${updateInterval}, shouldUpdate=${shouldUpdate}`);
-          if (shouldUpdate) {
-            // Update placeholders based on completion status
-            console.log(`Updating placeholders: completed=${completed}, total=${total}, placeholderIds.length=${placeholderIds.length}`);
-            placeholderIds.forEach((id, index) => {
-              if (index < completed) {
-                console.log(`Marking placeholder ${index} as completed`);
-                uploadManager.updatePlaceholder(id, { status: 'completed', progress: 100 });
-              } else if (index < completed + 10) { // Mark next 10 files as uploading
-                console.log(`Marking placeholder ${index} as uploading`);
-                uploadManager.updatePlaceholder(id, { status: 'uploading', progress });
-            } else {
-                uploadManager.updatePlaceholder(id, { progress });
-              }
-            });
-          }
-          
-          // Update results with latest batch (Web Worker now sends all accumulated results)
           if (data && data.results) {
-            allResults.length = 0; // Clear existing results
-            allResults.push(...data.results); // Use latest accumulated results
-          }
-          
-          if (onUploadProgress) {
-            onUploadProgress(progress, `${completed}/${total} files`);
+            allResults.length = 0;
+            allResults.push(...data.results);
           }
         } else if (type === 'complete') {
           controller.signal.removeEventListener('abort', abortHandler);
-      worker.terminate();
-      setActiveWorkers(prev => prev.filter(w => w !== worker));
-      uploadManager.unregisterWorker(worker);
+          worker.terminate();
+          setActiveWorkers(prev => prev.filter(w => w !== worker));
           uploadManager.unregisterWorker(worker);
           
-          // Use final results from complete message
           if (data && data.results) {
-            allResults.length = 0; // Clear existing results
-            allResults.push(...data.results); // Use final results
+            allResults.length = 0;
+            allResults.push(...data.results);
           }
           
-          // Set the results for display
           setUploadResults(allResults);
           
-          // Mark placeholders based on actual results - only successful uploads as completed
-          allResults.forEach((result, index) => {
-            if (placeholderIds[index]) {
-              if (result.success) {
-                uploadManager.updatePlaceholder(placeholderIds[index], { 
-                  status: 'completed', 
-                  progress: 100 
-                });
-              } else {
-                uploadManager.updatePlaceholder(placeholderIds[index], { 
-                  status: result.error === 'Upload cancelled' ? 'cancelled' : 'failed', 
-                  progress: 0,
-                  error: result.error 
-                });
-              }
-            }
-          });
+          // SIMPLE FIX: Count successful uploads and increment counter
+          const successfulUploads = allResults.filter(result => result.success).length;
+          for (let i = 0; i < successfulUploads; i++) {
+            uploadManager.incrementCompleted();
+          }
+          
           resolve();
         } else if (type === 'cancelled') {
-          // Worker was cancelled - mark all remaining items as cancelled
-          const allPlaceholderIds = Object.values(batchPlaceholderIds).flat();
-          allPlaceholderIds.forEach(placeholderId => {
-            uploadManager.updatePlaceholder(placeholderId, { 
-              status: 'cancelled', 
-              progress: 0, 
-              error: 'Upload cancelled' 
-            });
-          });
-          
           controller.signal.removeEventListener('abort', abortHandler);
-      worker.terminate();
-      setActiveWorkers(prev => prev.filter(w => w !== worker));
-      uploadManager.unregisterWorker(worker);
+          worker.terminate();
+          setActiveWorkers(prev => prev.filter(w => w !== worker));
           uploadManager.unregisterWorker(worker);
           const abortErr = new Error('Upload cancelled');
           abortErr.name = 'AbortError';
@@ -1228,19 +1159,29 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
             Upload individual files or entire directories while preserving folder structure
           </Typography>
 
-          {/* Upload Area */}
+          {/* Enhanced Upload Area */}
           <Box
             sx={{
               border: '2px dashed',
-              borderColor: isUploading ? 'warning.main' : files.length > 0 ? 'success.main' : 'grey.300',
+              borderColor: isDragOver ? 'primary.main' : isUploading ? 'warning.main' : files.length > 0 ? 'success.main' : 'grey.300',
               borderRadius: 2,
               p: 4,
               textAlign: 'center',
-              bgcolor: isUploading ? 'warning.light' : files.length > 0 ? 'success.light' : 'grey.50',
+              bgcolor: isDragOver ? 'primary.50' : isUploading ? 'warning.light' : files.length > 0 ? 'success.light' : 'grey.50',
               opacity: isUploading ? 0.7 : 1,
               pointerEvents: isUploading ? 'none' : 'auto',
+              transition: 'all 0.3s ease',
+              cursor: isUploading ? 'not-allowed' : 'pointer',
+              transform: isDragOver ? 'scale(1.02)' : 'scale(1)',
+              '&:hover': {
+                borderColor: isUploading ? 'warning.main' : files.length > 0 ? 'success.main' : 'primary.main',
+                bgcolor: isUploading ? 'warning.light' : files.length > 0 ? 'success.main' : 'primary.50',
+                transform: isUploading ? 'none' : 'translateY(-2px)',
+                boxShadow: isUploading ? 'none' : 2
+              }
             }}
             onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
             onDrop={handleDrop}
           >
             <input
@@ -1262,52 +1203,94 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
               style={{ display: 'none' }}
             />
             
-            <FolderOpen sx={{ fontSize: 48, mb: 2 }} />
-            <Typography variant="h6" gutterBottom>
-              {files.length > 0 ? 'Files Selected' : 'Select Files or Directory'}
-            </Typography>
-            <Typography variant="body2" sx={{ mb: 3 }}>
-              Choose how you want to upload files
-            </Typography>
-            
-            <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
-              <Button
-                variant="outlined"
-                startIcon={<InsertDriveFile />}
-                onClick={() => {
-                  // Prevent file selection during upload
-                  if (uploadInProgressRef.current || isUploading) {
-                    console.warn('Cannot select files while upload is in progress');
-                    return;
-                  }
-                  fileInputRef.current?.click();
-                }}
-                disabled={isUploading}
-                sx={{ minWidth: 150 }}
-              >
-                Select Files
-              </Button>
-              <Button
-                variant="outlined"
-                startIcon={<FolderOpen />}
-                onClick={() => {
-                  // Prevent directory selection during upload
-                  if (uploadInProgressRef.current || isUploading) {
-                    console.warn('Cannot select directories while upload is in progress');
-                    return;
-                  }
-                  directoryInputRef.current?.click();
-                }}
-                disabled={isUploading}
-                sx={{ minWidth: 150 }}
-              >
-                Select Directory
-              </Button>
-            </Box>
-            
-            <Typography variant="caption" sx={{ mt: 2, display: 'block' }}>
-              Or drag & drop individual files here
-            </Typography>
+            {isDragOver ? (
+              <Box>
+                <CloudUpload sx={{ fontSize: 48, mb: 2, color: 'primary.main' }} />
+                <Typography variant="h6" gutterBottom sx={{ color: 'primary.main', fontWeight: 600 }}>
+                  Drop Files Here
+                </Typography>
+                <Typography variant="body2" sx={{ mb: 3, color: 'text.secondary' }}>
+                  Release to upload your files
+                </Typography>
+              </Box>
+            ) : files.length > 0 ? (
+              <Box>
+                <CheckCircle sx={{ fontSize: 48, mb: 2, color: 'success.main' }} />
+                <Typography variant="h6" gutterBottom sx={{ color: 'success.main', fontWeight: 600 }}>
+                  Files Ready for Upload
+                </Typography>
+                <Typography variant="body2" sx={{ mb: 3, color: 'text.secondary' }}>
+                  {files.reduce((sum, dir) => sum + dir.files.length, 0)} files from {files.length} folders selected
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
+                  <Button
+                    variant="outlined"
+                    startIcon={<Refresh />}
+                    onClick={() => {
+                      if (uploadInProgressRef.current || isUploading) return;
+                      fileInputRef.current?.click();
+                    }}
+                    disabled={isUploading}
+                    sx={{ minWidth: 150 }}
+                  >
+                    Add More Files
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    startIcon={<FolderOpen />}
+                    onClick={() => {
+                      if (uploadInProgressRef.current || isUploading) return;
+                      directoryInputRef.current?.click();
+                    }}
+                    disabled={isUploading}
+                    sx={{ minWidth: 150 }}
+                  >
+                    Add Folder
+                  </Button>
+                </Box>
+              </Box>
+            ) : (
+              <Box>
+                <CloudUpload sx={{ fontSize: 48, mb: 2, color: 'primary.main' }} />
+                <Typography variant="h6" gutterBottom>
+                  Upload Your Files
+                </Typography>
+                <Typography variant="body2" sx={{ mb: 3, color: 'text.secondary' }}>
+                  Choose files or folders to upload to your secure storage
+                </Typography>
+                
+                <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
+                  <Button
+                    variant="contained"
+                    startIcon={<InsertDriveFile />}
+                    onClick={() => {
+                      if (uploadInProgressRef.current || isUploading) return;
+                      fileInputRef.current?.click();
+                    }}
+                    disabled={isUploading}
+                    sx={{ minWidth: 150, py: 1.5 }}
+                  >
+                    Select Files
+                  </Button>
+                  <Button
+                    variant="contained"
+                    startIcon={<FolderOpen />}
+                    onClick={() => {
+                      if (uploadInProgressRef.current || isUploading) return;
+                      directoryInputRef.current?.click();
+                    }}
+                    disabled={isUploading}
+                    sx={{ minWidth: 150, py: 1.5 }}
+                  >
+                    Select Folder
+                  </Button>
+                </Box>
+                
+                <Typography variant="caption" sx={{ mt: 3, display: 'block', color: 'text.secondary' }}>
+                  Or drag & drop files/folders here
+                </Typography>
+              </Box>
+            )}
           </Box>
 
           {/* File List */}
@@ -1388,67 +1371,71 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
             </Box>
           )}
 
-          {/* Validation Warnings */}
+          {/* Simple Warning Display */}
           {validationWarnings.length > 0 && (
-            <Box sx={{ mt: 2 }}>
-              {validationWarnings.map((warning, index) => (
-                <Alert key={index} severity="warning" sx={{ mb: 1 }}>
-                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                    {warning.message}
+            <Alert severity="info" sx={{ mt: 2 }}>
+              <Typography variant="body2">
+                {validationWarnings[0].message}: {validationWarnings[0].details}
+              </Typography>
+            </Alert>
+          )}
+
+          {/* Simplified Upload Confirmation */}
+          {files.length > 0 && !isUploading && validationErrors.length === 0 && (
+            <Paper sx={{ p: 3, mt: 2, bgcolor: 'grey.50', border: '1px solid', borderColor: 'grey.200' }}>
+              <Stack spacing={2}>
+                {/* Main Upload Info */}
+                <Box sx={{ textAlign: 'center' }}>
+                  <CloudUpload sx={{ fontSize: 48, color: 'primary.main', mb: 1 }} />
+                  <Typography variant="h6" sx={{ fontWeight: 600, mb: 0.5 }}>
+                    Ready to Upload
                   </Typography>
-                  {warning.details && (
-                    <Typography variant="caption" sx={{ display: 'block', mt: 0.5 }}>
-                      {warning.details}
+                  <Typography variant="body2" color="text.secondary">
+                    {files.reduce((sum, dir) => sum + dir.files.length, 0)} files from {files.length} folders
+                  </Typography>
+                </Box>
+
+                {/* Simple Stats */}
+                <Box sx={{ display: 'flex', justifyContent: 'space-around', py: 2, bgcolor: 'white', borderRadius: 1 }}>
+                  <Box sx={{ textAlign: 'center' }}>
+                    <Typography variant="h6" sx={{ fontWeight: 600, color: 'primary.main' }}>
+                      {files.reduce((sum, dir) => sum + dir.files.length, 0)}
                     </Typography>
-                  )}
-                </Alert>
-              ))}
-            </Box>
-          )}
+                    <Typography variant="caption" color="text.secondary">
+                      Files
+                    </Typography>
+                  </Box>
+                  <Box sx={{ textAlign: 'center' }}>
+                    <Typography variant="h6" sx={{ fontWeight: 600, color: 'primary.main' }}>
+                      {files.length}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Folders
+                    </Typography>
+                  </Box>
+                  <Box sx={{ textAlign: 'center' }}>
+                    <Typography variant="h6" sx={{ fontWeight: 600, color: 'primary.main' }}>
+                      {encryptionEnabled ? '🔒' : '🔓'}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {encryptionEnabled ? 'Encrypted' : 'Standard'}
+                    </Typography>
+                  </Box>
+                </Box>
 
-          {/* Storage Check Info */}
-          {storageCheck && storageCheck.canUpload && (
-            <Alert severity="info" sx={{ mt: 2 }}>
-              <Typography variant="body2">
-                Storage Check: {formatBytes(storageCheck.remainingSpace)} remaining space
-              </Typography>
-            </Alert>
-          )}
-
-          {/* Upload Strategy Info */}
-          {uploadStrategy && uploadStrategy !== 'standard' && (
-            <Alert severity="info" sx={{ mt: 2 }}>
-              <Typography variant="body2">
-                Upload Strategy: {uploadStrategy.toUpperCase()} - Optimized for your file selection
-              </Typography>
-            </Alert>
-          )}
-
-          {/* Encryption Status */}
-          <Alert 
-            severity={encryptionEnabled ? "success" : "info"} 
-            sx={{ mt: 2 }}
-            icon={encryptionEnabled ? <Lock /> : <LockOpen />}
-          >
-            <Typography variant="body2" sx={{ fontWeight: 600 }}>
-              {encryptionEnabled ? '🔒 E2E Encryption Enabled' : '🔓 E2E Encryption Disabled'}
-            </Typography>
-            <Typography variant="caption" sx={{ display: 'block', mt: 0.5 }}>
-              {encryptionEnabled 
-                ? 'Files will be encrypted with AES-GCM 256-bit before upload. Only you can decrypt them.'
-                : 'Files will be uploaded without encryption. Enable E2E encryption from the dashboard for maximum security.'
-              }
-            </Typography>
-          </Alert>
-
-          {/* Upload Status */}
-          {uploadStatus && !isUploading && (
-            <Alert 
-              severity={uploadStatus.includes('failed') ? 'error' : uploadStatus.includes('completed') ? 'success' : 'info'}
-              sx={{ mt: 2 }}
-            >
-              {uploadStatus}
-            </Alert>
+                {/* Upload Button */}
+                <Button
+                  variant="contained"
+                  size="large"
+                  fullWidth
+                  onClick={handleUpload}
+                  disabled={isUploading || validationErrors.length > 0}
+                  sx={{ py: 1.5, fontSize: '1.1rem', fontWeight: 600 }}
+                >
+                  {isUploading ? 'Uploading...' : 'Start Upload'}
+                </Button>
+              </Stack>
+            </Paper>
           )}
 
           {/* Upload Progress */}
@@ -1538,7 +1525,7 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
                 handleUpload();
               }}
               startIcon={<CloudUpload />}
-              fullWidth={{ xs: true, sm: false }}
+              fullWidth
               sx={{
                 py: { xs: 1.5, sm: 1 },
                 fontSize: { xs: '0.875rem', sm: '1rem' },
@@ -1554,7 +1541,7 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
                 onClick={handleCancel}
                 disabled={isCancelling}
                 startIcon={<Stop />}
-                fullWidth={{ xs: true, sm: false }}
+                fullWidth
                 sx={{
                   py: { xs: 1.5, sm: 1 },
                   fontSize: { xs: '0.875rem', sm: '1rem' },
@@ -1576,7 +1563,7 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
               }}
               disabled={isUploading}
               startIcon={<Refresh />}
-              fullWidth={{ xs: true, sm: false }}
+              fullWidth
               sx={{
                 py: { xs: 1.5, sm: 1 },
                 fontSize: { xs: '0.875rem', sm: '1rem' },

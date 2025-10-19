@@ -7,7 +7,11 @@ export const API_CONFIG = {
 
 export const UPLOAD_CONFIG = {
   timeout: 300000, // 5 minutes
-  maxConcurrentUploads: 3,
+  maxConcurrentUploads: 8, // Increased from 3 to 8 for better throughput
+  bulkBatchSize: 200, // Files per bulk presigned URL request
+  webWorkerBatchSize: 200, // Increased from 100 to 200 for better bulk processing
+  mainBatchSize: 500, // Files per main processing batch
+  maxConcurrentWorkers: 4, // Maximum Web Workers running simultaneously
 };
 
 export const STORAGE_KEYS = {

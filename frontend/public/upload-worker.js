@@ -30,55 +30,81 @@ self.onmessage = function(e) {
     
     // Token received for authentication
     
-    // Process files in batches
-    const processBatch = async (fileBatch, batchIndex) => {
+  // Process files in batches
+  const processBatch = async (fileBatch, batchIndex) => {
     const results = [];
     
-    for (let i = 0; i < fileBatch.length; i++) {
-      const fileData = fileBatch[i];
+    // Check for cancellation before processing batch
+    if (cancelled) {
+      return fileBatch.map(fileData => ({
+        success: false,
+        file: fileData.name,
+        path: fileData.relativePath,
+        error: 'Upload cancelled'
+      }));
+    }
+    
+    try {
+      // Check if we have a valid token
+      if (!accessToken) {
+        console.error('No access token available for upload');
+        return fileBatch.map(fileData => ({
+          success: false,
+          file: fileData.name,
+          path: fileData.relativePath,
+          error: 'No authentication token available'
+        }));
+      }
       
-      // Check for cancellation before each file
+      // Prepare file metadata for bulk presigned URL request
+      const fileMetadata = fileBatch.map(fileData => ({
+        filename: fileData.name,
+        fileType: fileData.type,
+        fileSize: fileData.size,
+        relativePath: fileData.relativePath
+      }));
+      
+      // Get bulk presigned URLs using the new endpoint
+      const presignedResponse = await fetch(`${apiBaseUrl}/media-files/get_presigned_urls/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${accessToken}`
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          files: fileMetadata
+        })
+      });
+      
+      // Check for cancellation after API call
       if (cancelled) {
-        results.push({
+        return fileBatch.map(fileData => ({
           success: false,
           file: fileData.name,
           path: fileData.relativePath,
           error: 'Upload cancelled'
-        });
-        continue;
+        }));
       }
       
-      try {
-        // Check if we have a valid token
-        if (!accessToken) {
-          console.error('No access token available for upload');
-          results.push({
-            success: false,
-            file: fileData.name,
-            path: fileData.relativePath,
-            error: 'No authentication token available'
-          });
-          continue;
-        }
+      if (!presignedResponse.ok) {
+        console.error('Bulk presigned URL failed:', presignedResponse.status, await presignedResponse.text());
+        return fileBatch.map(fileData => ({
+          success: false,
+          file: fileData.name,
+          path: fileData.relativePath,
+          error: `Bulk presigned URL failed: ${presignedResponse.status}`
+        }));
+      }
+      
+      const { results: presignedResults } = await presignedResponse.json();
+      
+      // Upload each file using its presigned URL
+      for (let i = 0; i < fileBatch.length; i++) {
+        const fileData = fileBatch[i];
+        const presignedData = presignedResults[i];
         
-        // Get presigned URL
-        const presignedResponse = await fetch(`${apiBaseUrl}/uppy/presigned-url/`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${accessToken}`
-          },
-          credentials: 'include', // Include cookies for authentication
-          body: JSON.stringify({
-            filename: fileData.name,
-            fileType: fileData.type,
-            fileSize: fileData.size,
-            sessionId: sessionId,
-            relativePath: fileData.relativePath
-          })
-        });
-        
-        // Check for cancellation after API call
+        // Check for cancellation before each file
         if (cancelled) {
           results.push({
             success: false,
@@ -89,72 +115,43 @@ self.onmessage = function(e) {
           continue;
         }
         
-        if (!presignedResponse.ok) {
-          console.error('Presigned URL failed:', presignedResponse.status, await presignedResponse.text());
-          results.push({
-            success: false,
-            file: fileData.name,
-            path: fileData.relativePath,
-            error: `Presigned URL failed: ${presignedResponse.status}`
+        try {
+          // Send individual file progress update
+          self.postMessage({
+            type: 'progress',
+            data: {
+              placeholderId: `batch_${batchIndex}_${i}`,
+              progress: 50,
+              status: 'uploading',
+              fileIndex: batchIndex * 50 + i
+            }
           });
-          continue;
-        }
-        
-        const { presignedUrl, fileId } = await presignedResponse.json();
-        
-        // Send individual file progress update
-        self.postMessage({
-          type: 'progress',
-          data: {
-            placeholderId: `batch_${batchIndex}_${i}`,
-            progress: 50,
-            status: 'uploading',
-            fileIndex: batchIndex * 50 + i
-          }
-        });
-        
-        // Upload to S3
-        const formData = new FormData();
-        Object.keys(presignedUrl.fields).forEach(key => {
-          formData.append(key, presignedUrl.fields[key]);
-        });
-        formData.append('file', fileData.file);
-        
-        const uploadResponse = await fetch(presignedUrl.url, {
-          method: 'POST',
-          body: formData
-        });
-        
-        // Check for cancellation after upload
-        if (cancelled) {
-          results.push({
-            success: false,
-            file: fileData.name,
-            path: fileData.relativePath,
-            error: 'Upload cancelled'
+          
+          // Upload to S3 using presigned URL
+          const formData = new FormData();
+          Object.keys(presignedData.presignedUrl.fields).forEach(key => {
+            formData.append(key, presignedData.presignedUrl.fields[key]);
           });
-          continue;
-        }
-        
-        if (uploadResponse.ok) {
-          // Mark upload complete
-          const completeResponse = await fetch(`${apiBaseUrl}/uppy/upload-complete/`, {
+          formData.append('file', fileData.file);
+          
+          const uploadResponse = await fetch(presignedData.presignedUrl.url, {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${accessToken}`
-            },
-            credentials: 'include', // Include cookies for authentication
-            body: JSON.stringify({
-              fileId: fileId,
-              s3Key: presignedUrl.fields.key,
-              etag: uploadResponse.headers.get('ETag')
-            })
+            body: formData
           });
           
-          // Upload completion confirmed
+          // Check for cancellation after upload
+          if (cancelled) {
+            results.push({
+              success: false,
+              file: fileData.name,
+              path: fileData.relativePath,
+              error: 'Upload cancelled'
+            });
+            continue;
+          }
           
-          if (completeResponse.ok) {
+          if (uploadResponse.ok) {
+            // File record is already created by the bulk endpoint, no need to call markUploadComplete
             results.push({
               success: true,
               file: fileData.name,
@@ -162,32 +159,33 @@ self.onmessage = function(e) {
               size: fileData.size
             });
           } else {
-            console.error('Upload complete failed:', completeResponse.status, await completeResponse.text());
+            console.error('S3 upload failed:', uploadResponse.status, await uploadResponse.text());
             results.push({
               success: false,
               file: fileData.name,
               path: fileData.relativePath,
-              error: `Upload complete failed: ${completeResponse.status}`
+              error: `Upload failed: ${uploadResponse.status}`
             });
           }
-        } else {
-          console.error('S3 upload failed:', uploadResponse.status, await uploadResponse.text());
+        } catch (error) {
+          console.error('Upload error for', fileData.name, ':', error.message);
           results.push({
             success: false,
             file: fileData.name,
             path: fileData.relativePath,
-            error: `Upload failed: ${uploadResponse.status}`
+            error: cancelled ? 'Upload cancelled' : error.message
           });
         }
-      } catch (error) {
-        console.error('Upload error for', fileData.name, ':', error.message);
-        results.push({
-          success: false,
-          file: fileData.name,
-          path: fileData.relativePath,
-          error: cancelled ? 'Upload cancelled' : error.message
-        });
       }
+      
+    } catch (error) {
+      console.error('Batch processing error:', error.message);
+      return fileBatch.map(fileData => ({
+        success: false,
+        file: fileData.name,
+        path: fileData.relativePath,
+        error: cancelled ? 'Upload cancelled' : error.message
+      }));
     }
     
     return results;
@@ -195,50 +193,61 @@ self.onmessage = function(e) {
   
   // Process all files in batches
   const processAllFiles = async () => {
-    const allResults = [];
-    
-    for (let i = 0; i < files.length; i += batchSize) {
-      // Check for cancellation before each batch
-      if (cancelled) {
-        self.postMessage({ type: 'cancelled', results: allResults });
-        return;
-      }
+    try {
+      const allResults = [];
       
-      const batch = files.slice(i, i + batchSize);
-      const batchIndex = Math.floor(i / batchSize);
-      const batchResults = await processBatch(batch, batchIndex);
-      allResults.push(...batchResults);
-      
-      // Check for cancellation before sending progress
-      if (cancelled) {
-        self.postMessage({ 
-          type: 'cancelled', 
-          data: { results: allResults } 
+      for (let i = 0; i < files.length; i += batchSize) {
+        // Check for cancellation before each batch
+        if (cancelled) {
+          self.postMessage({ type: 'cancelled', results: allResults });
+          return;
+        }
+        
+        const batch = files.slice(i, i + batchSize);
+        const batchIndex = Math.floor(i / batchSize);
+        const batchResults = await processBatch(batch, batchIndex);
+        allResults.push(...batchResults);
+        
+        // Check for cancellation before sending progress
+        if (cancelled) {
+          self.postMessage({ 
+            type: 'cancelled', 
+            data: { results: allResults } 
+          });
+          return;
+        }
+        
+        // Send progress update
+        self.postMessage({
+          type: 'progress',
+          data: {
+            completed: allResults.length,
+            total: files.length,
+            results: allResults,
+            placeholderId: null, // Will be set by main thread
+            progress: (allResults.length / files.length) * 100,
+            status: 'uploading'
+          }
         });
-        return;
       }
       
-      // Send progress update
+        // Send final results
+        self.postMessage({
+          type: 'complete',
+          data: {
+            results: allResults
+          }
+        });
+    } catch (error) {
+      console.error('[Web Worker] Error processing files:', error);
       self.postMessage({
-        type: 'progress',
+        type: 'error',
         data: {
-          completed: allResults.length,
-          total: files.length,
-          results: allResults,
-          placeholderId: null, // Will be set by main thread
-          progress: (allResults.length / files.length) * 100,
-          status: 'uploading'
+          error: error.message,
+          results: []
         }
       });
     }
-    
-    // Send final results
-    self.postMessage({
-      type: 'complete',
-      data: {
-        results: allResults
-      }
-    });
   };
   
     processAllFiles();
