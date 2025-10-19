@@ -68,6 +68,12 @@ const ModernDashboard = () => {
   useEffect(() => {
     loadUserData();
     checkEncryptionStatus();
+    
+    // Check for hash fragment to set initial tab
+    const hash = window.location.hash.substring(1); // Remove the # symbol
+    if (hash && ['overview', 'hibernate', 'plans', 'why'].includes(hash)) {
+      setCurrentView(hash);
+    }
   }, []);
 
   // Load user data

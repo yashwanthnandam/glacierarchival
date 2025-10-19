@@ -170,7 +170,7 @@ const SimplifiedOverview = () => {
               transform: 'translateY(-2px)',
             }
           }}>
-            <CardContent sx={{ p: 3 }}>
+            <CardContent sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column' }}>
               <Box display="flex" alignItems="center" mb={3}>
                 <Box sx={{ 
                   p: 1.5, 
@@ -198,21 +198,23 @@ const SimplifiedOverview = () => {
                 }}
               />
               
-              <Typography variant="h3" sx={{ 
-                fontWeight: 800, 
-                color: 'text.primary', 
-                mb: 2
-              }}>
-                {planInfo.storage}
-              </Typography>
-              
-              <Typography variant="body1" sx={{ 
-                color: 'text.secondary', 
-                mb: 3,
-                lineHeight: 1.6
-              }}>
-                {planInfo.description}
-              </Typography>
+              <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                <Typography variant="h3" sx={{ 
+                  fontWeight: 800, 
+                  color: 'text.primary', 
+                  mb: 2
+                }}>
+                  {planInfo.storage}
+                </Typography>
+                
+                <Typography variant="body1" sx={{ 
+                  color: 'text.secondary', 
+                  mb: 3,
+                  lineHeight: 1.6
+                }}>
+                  {planInfo.description}
+                </Typography>
+              </Box>
 
               {currentPlan && (
                 <Box sx={{ 
@@ -246,7 +248,7 @@ const SimplifiedOverview = () => {
               transform: 'translateY(-2px)',
             }
           }}>
-            <CardContent sx={{ p: 3 }}>
+            <CardContent sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column' }}>
               <Box display="flex" alignItems="center" mb={3}>
                 <Box sx={{ 
                   p: 1.5, 
@@ -262,36 +264,38 @@ const SimplifiedOverview = () => {
                 </Typography>
               </Box>
               
-              <Typography variant="h3" sx={{ 
-                fontWeight: 800, 
-                color: 'text.primary', 
-                mb: 2
-              }}>
-                {formatFileSizeInGB(usageStats?.total_storage_bytes || 0)}
-              </Typography>
-              
-              <Box sx={{ mb: 3 }}>
-                <LinearProgress 
-                  variant="determinate" 
-                  value={usagePercentage} 
-                  color={usageColor}
-                  sx={{ 
-                    height: 10, 
-                    borderRadius: 5, 
-                    mb: 2,
-                    bgcolor: 'grey.200',
-                    '& .MuiLinearProgress-bar': {
-                      borderRadius: 5,
-                    }
-                  }}
-                />
-                
-                <Typography variant="body1" sx={{ 
-                  color: 'text.secondary',
-                  fontWeight: 500
+              <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                <Typography variant="h3" sx={{ 
+                  fontWeight: 800, 
+                  color: 'text.primary', 
+                  mb: 2
                 }}>
-                  {usagePercentage.toFixed(1)}% of {planInfo.storage} used
+                  {formatFileSizeInGB(usageStats?.total_storage_bytes || 0)}
                 </Typography>
+                
+                <Box sx={{ mb: 3 }}>
+                  <LinearProgress 
+                    variant="determinate" 
+                    value={usagePercentage} 
+                    color={usageColor}
+                    sx={{ 
+                      height: 10, 
+                      borderRadius: 5, 
+                      mb: 2,
+                      bgcolor: 'grey.200',
+                      '& .MuiLinearProgress-bar': {
+                        borderRadius: 5,
+                      }
+                    }}
+                  />
+                  
+                  <Typography variant="body1" sx={{ 
+                    color: 'text.secondary',
+                    fontWeight: 500
+                  }}>
+                    {usagePercentage.toFixed(1)}% of {planInfo.storage} used
+                  </Typography>
+                </Box>
               </Box>
 
               {usageStats && (
@@ -326,7 +330,7 @@ const SimplifiedOverview = () => {
               transform: 'translateY(-2px)',
             }
           }}>
-            <CardContent sx={{ p: 3 }}>
+            <CardContent sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column' }}>
               <Box display="flex" alignItems="center" mb={3}>
                 <Box sx={{ 
                   p: 1.5, 
@@ -342,26 +346,28 @@ const SimplifiedOverview = () => {
                 </Typography>
               </Box>
               
-              <Box sx={{ mb: 3 }}>
-                <Box display="flex" alignItems="center" mb={2}>
-                  <CheckCircle sx={{ color: 'text.secondary', mr: 1 }} />
-                  <Typography variant="body1" sx={{ fontWeight: 600, color: 'text.primary' }}>
-                    Storage Active
-                  </Typography>
-                </Box>
-                
-                <Box display="flex" alignItems="center" mb={2}>
-                  <CheckCircle sx={{ color: 'text.secondary', mr: 1 }} />
-                  <Typography variant="body1" sx={{ fontWeight: 600, color: 'text.primary' }}>
-                    Encryption Enabled
-                  </Typography>
-                </Box>
-                
-                <Box display="flex" alignItems="center">
-                  <CheckCircle sx={{ color: 'text.secondary', mr: 1 }} />
-                  <Typography variant="body1" sx={{ fontWeight: 600, color: 'text.primary' }}>
-                    Backup Secure
-                  </Typography>
+              <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                <Box sx={{ mb: 3 }}>
+                  <Box display="flex" alignItems="center" mb={2}>
+                    <CheckCircle sx={{ color: 'text.secondary', mr: 1 }} />
+                    <Typography variant="body1" sx={{ fontWeight: 600, color: 'text.primary' }}>
+                      Storage Active
+                    </Typography>
+                  </Box>
+                  
+                  <Box display="flex" alignItems="center" mb={2}>
+                    <CheckCircle sx={{ color: 'text.secondary', mr: 1 }} />
+                    <Typography variant="body1" sx={{ fontWeight: 600, color: 'text.primary' }}>
+                      Encryption Enabled
+                    </Typography>
+                  </Box>
+                  
+                  <Box display="flex" alignItems="center">
+                    <CheckCircle sx={{ color: 'text.secondary', mr: 1 }} />
+                    <Typography variant="body1" sx={{ fontWeight: 600, color: 'text.primary' }}>
+                      Backup Secure
+                    </Typography>
+                  </Box>
                 </Box>
               </Box>
 
@@ -419,9 +425,8 @@ const SimplifiedOverview = () => {
                   fullWidth
                   startIcon={<AcUnit />}
                   onClick={() => {
-                    // Navigate to dashboard with hibernate tab selected
-                    window.location.href = '/dashboard';
-                    // Note: This will show the Data Manager tab in the dashboard
+                    // Navigate to dashboard with hibernate tab selected using hash
+                    window.location.href = '/dashboard#hibernate';
                   }}
                   sx={{
                     py: 2,
