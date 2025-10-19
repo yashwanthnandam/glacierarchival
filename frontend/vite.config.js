@@ -25,4 +25,49 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    // Optimize build performance for CI/CD environments
+    target: 'es2015',
+    minify: 'esbuild', // Faster than terser
+    sourcemap: false,
+    // Increase chunk size warning limit
+    chunkSizeWarningLimit: 1000,
+    // Reduce memory usage
+    rollupOptions: {
+      maxParallelFileOps: 2, // Limit parallel file operations
+      output: {
+        manualChunks: {
+          // Separate vendor chunks for better caching
+          vendor: ['react', 'react-dom'],
+          ui: ['@mui/material', '@mui/icons-material'],
+          utils: ['axios', 'jszip'],
+        },
+      },
+      external: (id) => {
+        // Handle Node.js modules that shouldn't be bundled
+        if (id === 'crypto' || id === 'fs' || id === 'path') {
+          return true;
+        }
+        return false;
+      },
+    },
+    // Define global constants
+    define: {
+      global: 'globalThis',
+    },
+    // Reduce memory usage during build
+    commonjsOptions: {
+      include: [/node_modules/],
+    },
+  },
+  optimizeDeps: {
+    // Exclude problematic dependencies from pre-bundling
+    exclude: ['crypto'],
+  },
+  resolve: {
+    alias: {
+      // Provide browser-compatible alternatives
+      crypto: 'crypto-browserify',
+    },
+  },
 });

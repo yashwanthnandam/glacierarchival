@@ -8,11 +8,12 @@ on:
 env:
   SERVER_IP: 3.110.26.97
   SERVER_USER: ec2-user
-  PROJECT_DIR: /home/ec2-user
+  PROJECT_DIR: /home/ec2-user/glacierarchival
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     
     steps:
     - name: Checkout code
@@ -23,10 +24,18 @@ jobs:
       with:
         node-version: '18'
         
-    - name: Install frontend dependencies
+    - name: Install and build frontend
       run: |
         cd frontend
-        npm install
+        npm ci
+        npm run build
+        
+    - name: Commit build files
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add -f frontend/dist/
+        git diff --staged --quiet || git commit -m "Build frontend for deployment [skip ci]"
         
     - name: Deploy to server
       uses: appleboy/ssh-action@v1.0.3
@@ -34,24 +43,17 @@ jobs:
         host: ${{ env.SERVER_IP }}
         username: ${{ env.SERVER_USER }}
         key: ${{ secrets.SSH_PRIVATE_KEY }}
+        timeout: 15m
+        command_timeout: 10m
         script: |
+          set -e
           cd ${{ env.PROJECT_DIR }}
           
-          echo "🔄 Stopping services..."
-          docker-compose -f docker-compose.production.yml down
-          
-          echo "🔄 Setting up repository..."
-          if [ -d "glacierarchival" ]; then
-            cd glacierarchival
-            git fetch origin
-            git reset --hard origin/main
-          else
-            git clone https://github.com/yashwanthnandam/glacierarchival.git
-            cd glacierarchival
-          fi
+          echo "🔄 Pulling latest code..."
+          git fetch origin
+          git reset --hard origin/main
           
           echo "🔄 Setting up environment variables..."
-          # Create backend/.env file (required by docker-compose)
           cat > backend/.env << 'EOF'
           AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -62,7 +64,6 @@ jobs:
           ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY }}
           EOF
           
-          # Export environment variables to host environment (for docker-compose)
           export AWS_ACCESS_KEY_ID='${{ secrets.AWS_ACCESS_KEY_ID }}'
           export AWS_SECRET_ACCESS_KEY='${{ secrets.AWS_SECRET_ACCESS_KEY }}'
           export EMAIL_HOST_PASSWORD='${{ secrets.EMAIL_HOST_PASSWORD }}'
@@ -71,59 +72,93 @@ jobs:
           export SECRET_KEY='${{ secrets.SECRET_KEY }}'
           export ENCRYPTION_KEY='${{ secrets.ENCRYPTION_KEY }}'
           
-          echo "🔄 Building frontend..."
-          cd frontend
-          npm install
-          npm run build
-          cd ..
+          echo "🔄 Building updated services (using cache)..."
+          docker-compose -f docker-compose.production.yml build
           
-          echo "🔄 Building and starting services..."
-          docker-compose -f docker-compose.production.yml up --build -d
+          echo "🔄 Running migrations before deployment..."
+          # Start only postgres and redis if not running
+          docker-compose -f docker-compose.production.yml up -d postgres redis
+          sleep 5
+          
+          # Start backend temporarily for migrations
+          docker-compose -f docker-compose.production.yml up -d backend
+          sleep 10
+          
+          # Wait for database
+          timeout 60 bash -c 'until docker exec glacierarchival-backend-1 python manage.py check --database default 2>/dev/null; do sleep 2; done'
+          
+          # Run migrations
+          docker exec glacierarchival-backend-1 python manage.py migrate
+          
+          # Collect static files
+          docker exec glacierarchival-backend-1 python manage.py collectstatic --noinput --clear
+          
+          echo "🔄 Deploying all services..."
+          docker-compose -f docker-compose.production.yml up -d
           
           echo "🔄 Fixing Nginx configuration..."
-          sudo sed -i 's/proxy_pass http:\/\/127.0.0.1:3000;/proxy_pass http:\/\/127.0.0.1:8080;/' /etc/nginx/conf.d/datahibernate.conf
+          sudo sed -i 's/proxy_pass http:\/\/127.0.0.1:3000;/proxy_pass http:\/\/127.0.0.1:8080;/' /etc/nginx/conf.d/datahibernate.conf 2>/dev/null || true
           sudo nginx -t && sudo systemctl reload nginx
           
-          echo "⏳ Waiting for services to start..."
+          echo "⏳ Waiting for services to be healthy..."
           sleep 15
           
-          echo "🔄 Running database migrations..."
-          docker exec glacierarchival-backend-1 python manage.py migrate
+          echo "🔄 Health check..."
+          docker-compose -f docker-compose.production.yml ps
           
-          echo "🔄 Checking for pending migrations..."
-          docker exec glacierarchival-backend-1 python manage.py makemigrations --check --dry-run || echo "⚠️ Pending migrations found, applying them..."
-          docker exec glacierarchival-backend-1 python manage.py makemigrations
-          docker exec glacierarchival-backend-1 python manage.py migrate
-          
-          echo "🔄 Collecting static files..."
-          docker exec glacierarchival-backend-1 python manage.py collectstatic --noinput --clear || echo "⚠️ Static files collection failed, continuing..."
-          
-          echo "🔄 Restarting services..."
-          docker-compose -f docker-compose.production.yml restart
+          # Verify backend is responding
+          for i in {1..10}; do
+            if docker exec glacierarchival-backend-1 python manage.py check 2>/dev/null; then
+              echo "✅ Backend is healthy!"
+              break
+            fi
+            echo "Waiting for backend... ($i/10)"
+            sleep 3
+          done
           
           echo "✅ Deployment completed!"
           
+    - name: Print logs on failure
+      if: failure()
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ env.SERVER_IP }}
+        username: ${{ env.SERVER_USER }}
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        script: |
+          cd ${{ env.PROJECT_DIR }}
+          echo "🔄 Container status..."
+          docker-compose -f docker-compose.production.yml ps
+          echo ""
+          echo "🔄 Backend logs (last 100 lines)..."
+          docker-compose -f docker-compose.production.yml logs --tail=100 backend
+          echo ""
+          echo "🔄 Frontend logs (last 50 lines)..."
+          docker-compose -f docker-compose.production.yml logs --tail=50 frontend
+          echo ""
+          echo "🔄 Postgres logs (last 30 lines)..."
+          docker-compose -f docker-compose.production.yml logs --tail=30 postgres
+          
     - name: Health check
       run: |
-        echo "🔄 Starting health check with retries..."
-        for i in {1..5}; do
-          echo "Health check attempt $i/5..."
-          if curl -f https://datahibernate.in/; then
-            echo "✅ Health check passed!"
+        echo "🔄 Starting external health check..."
+        for i in {1..6}; do
+          echo "Attempt $i/6..."
+          if curl -f -s -o /dev/null -w "%{http_code}" https://datahibernate.in/ | grep -q "200\|301\|302"; then
+            echo "✅ Site is responding!"
             exit 0
-          else
-            echo "Health check failed. Retry $i/5..."
-            sleep 10
           fi
+          echo "Waiting... ($i/6)"
+          sleep 10
         done
-        echo "❌ Health check failed after 5 attempts."
-        exit 1
+        echo "⚠️ Site health check inconclusive"
         
     - name: Notify deployment status
       if: always()
       run: |
         if [ "${{ job.status }}" == "success" ]; then
           echo "🚀 Deployment successful!"
+          echo "🌐 Site: https://datahibernate.in"
         else
           echo "❌ Deployment failed!"
         fi

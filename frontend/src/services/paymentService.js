@@ -1,4 +1,5 @@
-import Razorpay from 'razorpay';
+// Note: We don't import Razorpay directly as it's loaded via script tag
+// This prevents Node.js crypto module issues during build
 import { paymentAPI } from './api';
 
 class PaymentService {

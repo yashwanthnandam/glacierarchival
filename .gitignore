@@ -264,9 +264,10 @@ backend/media/
 backend/staticfiles/
 backend/db.sqlite3
 backend/celerybeat-schedule*
-frontend/dist/
+# Frontend build output (allow for deployment)
+# frontend/dist/
 frontend/node_modules/
-frontend/package-lock.json
+# frontend/package-lock.json
 
 # Test files
 test.txt

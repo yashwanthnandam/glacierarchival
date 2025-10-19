@@ -29,7 +29,11 @@ COPY . /app/
 
 # Create a non-root user for security
 RUN adduser --system --group django --no-create-home
-RUN chown -R django:django /app
+
+# Create directories for volumes and set permissions BEFORE switching user
+RUN mkdir -p /app/staticfiles /app/media && \
+    chown -R django:django /app
+
 USER django
 
 # Expose port

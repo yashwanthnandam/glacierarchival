@@ -64,8 +64,7 @@ services:
       - media_files:/app/media
     restart: unless-stopped
     command: >
-      sh -c "python manage.py migrate &&
-             gunicorn deeparchival.wsgi:application --bind 0.0.0.0:8000 --workers 2"
+      sh -c "gunicorn deeparchival.wsgi:application --bind 0.0.0.0:8000 --workers 2"
 
   frontend:
     build:
