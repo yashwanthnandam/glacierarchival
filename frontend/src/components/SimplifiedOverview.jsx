@@ -91,7 +91,9 @@ const SimplifiedOverview = () => {
   const getUsagePercentage = () => {
     if (!usageStats) return 0;
     
-    const usedGB = usageStats.total_storage_bytes / (1024 ** 3);
+    // Handle both API response formats
+    const usedBytes = usageStats.current_storage?.bytes || usageStats.total_storage_bytes || 0;
+    const usedGB = usedBytes / (1024 ** 3);
     const limitGB = currentPlan && currentPlan.plan ? 
       (currentPlan.plan.storage_tier === '100gb' ? 100 : 
        currentPlan.plan.storage_tier === '500gb' ? 500 : 1024) : 15;
@@ -303,7 +305,7 @@ const SimplifiedOverview = () => {
                     color: 'text.secondary',
                     fontWeight: 500
                   }}>
-                    {usageStats.file_count} files stored
+                    {usageStats.current_storage?.gb?.toFixed(1) || '0.0'} GB stored
                   </Typography>
                 </Box>
               )}

@@ -258,12 +258,38 @@ class MediaFileViewSet(viewsets.ModelViewSet):
         )
         
         # Filter by folder if specified
+        folders_data = []
         if folder_path:
             print(f"DEBUG: Filtering by folder_path: '{folder_path}'")
             if folder_path == 'root':
                 # Root files (no relative_path or relative_path is empty)
                 queryset = queryset.filter(Q(relative_path__isnull=True) | Q(relative_path=''))
                 print(f"DEBUG: Root filter applied, count: {queryset.count()}")
+                
+                # Also get folders in root (top-level directories)
+                all_files = MediaFile.objects.filter(user_id=user_id, is_deleted=False).exclude(
+                    Q(relative_path__isnull=True) | Q(relative_path='')
+                )
+                top_level_dirs = set()
+                for file in all_files:
+                    if file.relative_path:
+                        first_part = file.relative_path.split('/')[0]
+                        top_level_dirs.add(first_part)
+                
+                # Create folder entries for root view
+                for dir_name in sorted(top_level_dirs):
+                    # Count files in this directory
+                    dir_files = all_files.filter(relative_path__startswith=f"{dir_name}/")
+                    dir_file_count = dir_files.count()
+                    dir_size = sum(file.file_size for file in dir_files if file.file_size)
+                    folders_data.append({
+                        'name': dir_name,
+                        'type': 'folder',
+                        'fileCount': dir_file_count,
+                        'size': dir_size,
+                        'relative_path': dir_name
+                    })
+                print(f"DEBUG: Found {len(folders_data)} folders in root")
             else:
                 # Files in specific folder (non-recursive immediate folder scope)
                 queryset = queryset.filter(Q(relative_path=folder_path) | Q(relative_path__startswith=f"{folder_path}/"))
@@ -294,6 +320,7 @@ class MediaFileViewSet(viewsets.ModelViewSet):
                 })
             result = {
                 'files': files_data,
+                'folders': folders_data,
                 'pagination': {
                     'current_page': page_obj.number,
                     'total_pages': paginator.num_pages,
@@ -314,7 +341,8 @@ class MediaFileViewSet(viewsets.ModelViewSet):
                     'uploaded_at': file.uploaded_at.isoformat(),
                 })
             result = {
-                'files': files_data
+                'files': files_data,
+                'folders': folders_data
             }
         
         # Cache for 5 minutes

@@ -43,7 +43,7 @@ import {
   getUploadStrategy,
   formatBytes 
 } from '../utils/uploadValidation';
-import { FILE_UPLOAD } from '../constants';
+import { FILE_UPLOAD, API_CONFIG } from '../constants';
 import encryptionService from '../services/encryptionService';
 import analyticsService from '../services/analyticsService';
 import { captureException, addBreadcrumb } from '../services/sentryService';
@@ -897,7 +897,8 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
         files: batchFiles,
         sessionId: sessionId,
         batchSize: 50,
-        accessToken: secureTokenStorage.getAccessToken()
+        accessToken: secureTokenStorage.getAccessToken(),
+        apiBaseUrl: API_CONFIG.baseURL.replace('/api/', '/api')
       });
       
       // Handle cancellation by sending cancel message then terminating the worker
@@ -1036,7 +1037,8 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
         files: allFiles,
         sessionId: sessionId,
         batchSize: 50, // Increased from 10 to 50 for better performance
-        accessToken: secureTokenStorage.getAccessToken()
+        accessToken: secureTokenStorage.getAccessToken(),
+        apiBaseUrl: API_CONFIG.baseURL.replace('/api/', '/api')
       });
       
       // Handle cancellation by sending cancel message then terminating the worker

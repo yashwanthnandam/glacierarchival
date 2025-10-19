@@ -1197,8 +1197,11 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
       
       // Handle different response structures
       let allFiles = [];
+      let apiFolders = [];
+      
       if (response.data && Array.isArray(response.data.files)) {
         allFiles = response.data.files;
+        apiFolders = response.data.folders || [];
       } else if (Array.isArray(response.data)) {
         allFiles = response.data;
       } else if (response.data && Array.isArray(response.data.data)) {
@@ -1209,6 +1212,22 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
       if (!Array.isArray(allFiles)) {
         allFiles = [];
       }
+      
+      // Convert API folders to file-like objects for compatibility
+      const folderFiles = apiFolders.map(folder => ({
+        id: `folder_${folder.name}`,
+        original_filename: folder.name,
+        file_type: 'folder',
+        file_size: folder.size || 0,
+        relative_path: folder.relative_path,
+        status: 'uploaded',
+        uploaded_at: new Date().toISOString(),
+        fileCount: folder.fileCount,  // Use camelCase for frontend
+        size: folder.size || 0  // Use size from API response
+      }));
+      
+      // Combine files and folders
+      allFiles = [...allFiles, ...folderFiles];
 
       // Group files by folder structure
       const folderMap = new Map();
@@ -1222,14 +1241,14 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
           
           // Check if this is a root-level folder (relative_path matches original_filename)
           if (pathParts.length === 0 || (pathParts.length === 1 && pathParts[0] === file.original_filename)) {
-            // Root level folder
+            // Root level folder - preserve API data
             const folderPath = file.original_filename;
             folderMap.set(folderPath, {
               name: file.original_filename,
               path: folderPath,
               parent: 'root',
-              fileCount: 0,
-              size: 0
+              fileCount: file.fileCount || 0,
+              size: file.size || 0
             });
           } else {
             // Nested folder
@@ -1296,8 +1315,12 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
           const folderPath = currentPath === 'root' ? part : `${currentPath}/${part}`;
           const folder = folderMap.get(folderPath);
           if (folder) {
-            folder.fileCount += 1;
-            folder.size += file.file_size || 0;
+            // Only add stats if this folder doesn't already have API data
+            // (API folders have fileCount > 0 or size > 0, calculated folders start at 0)
+            if (folder.fileCount === 0 && folder.size === 0) {
+              folder.fileCount += 1;
+              folder.size += file.file_size || 0;
+            }
           }
           currentPath = folderPath;
         });

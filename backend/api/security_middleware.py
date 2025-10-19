@@ -20,48 +20,51 @@ class SecurityHeadersMiddleware(MiddlewareMixin):
     """
     
     def process_response(self, request, response):
-        # Content Security Policy
-        csp_policy = (
-            "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://checkout.razorpay.com; "
-            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-            "font-src 'self' https://fonts.gstatic.com; "
-            "img-src 'self' data: https:; "
-            "connect-src 'self' https://api.razorpay.com; "
-            "frame-src https://checkout.razorpay.com; "
-            "object-src 'none'; "
-            "base-uri 'self'; "
-            "form-action 'self'; "
-            "frame-ancestors 'none';"
-        )
-        response['Content-Security-Policy'] = csp_policy
+        # Only add security headers if they don't already exist
+        # This prevents overriding CORS headers set by corsheaders middleware
         
-        # X-Frame-Options
-        response['X-Frame-Options'] = 'DENY'
+        if 'Content-Security-Policy' not in response:
+            csp_policy = (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://checkout.razorpay.com; "
+                "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+                "font-src 'self' https://fonts.gstatic.com; "
+                "img-src 'self' data: https:; "
+                "connect-src 'self' https://api.razorpay.com; "
+                "frame-src https://checkout.razorpay.com; "
+                "object-src 'none'; "
+                "base-uri 'self'; "
+                "form-action 'self'; "
+                "frame-ancestors 'none';"
+            )
+            response['Content-Security-Policy'] = csp_policy
         
-        # X-Content-Type-Options
-        response['X-Content-Type-Options'] = 'nosniff'
+        if 'X-Frame-Options' not in response:
+            response['X-Frame-Options'] = 'DENY'
         
-        # X-XSS-Protection
-        response['X-XSS-Protection'] = '1; mode=block'
+        if 'X-Content-Type-Options' not in response:
+            response['X-Content-Type-Options'] = 'nosniff'
         
-        # Referrer-Policy
-        response['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+        if 'X-XSS-Protection' not in response:
+            response['X-XSS-Protection'] = '1; mode=block'
         
-        # Permissions-Policy
-        response['Permissions-Policy'] = (
-            "geolocation=(), "
-            "microphone=(), "
-            "camera=(), "
-            "payment=(), "
-            "usb=(), "
-            "magnetometer=(), "
-            "gyroscope=(), "
-            "speaker=(), "
-            "vibrate=(), "
-            "fullscreen=(self), "
-            "sync-xhr=()"
-        )
+        if 'Referrer-Policy' not in response:
+            response['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+        
+        if 'Permissions-Policy' not in response:
+            response['Permissions-Policy'] = (
+                "geolocation=(), "
+                "microphone=(), "
+                "camera=(), "
+                "payment=(), "
+                "usb=(), "
+                "magnetometer=(), "
+                "gyroscope=(), "
+                "speaker=(), "
+                "vibrate=(), "
+                "fullscreen=(self), "
+                "sync-xhr=()"
+            )
         
         return response
 

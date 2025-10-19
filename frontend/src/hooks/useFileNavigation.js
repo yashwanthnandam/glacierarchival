@@ -10,6 +10,7 @@ import secureTokenStorage from './secureTokenStorage';
 export const useFileNavigation = (initialPath = 'root') => {
   const [currentPath, setCurrentPath] = useState(initialPath);
   const [files, setFiles] = useState([]);
+  const [folders, setFolders] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [folderStructure, setFolderStructure] = useState({});
@@ -44,6 +45,7 @@ export const useFileNavigation = (initialPath = 'root') => {
 
       const filesData = await filesResponse.json();
       setFiles(filesData.files || []);
+      setFolders(filesData.folders || []);
 
       // Load folder structure if not already loaded
       if (Object.keys(folderStructure).length === 0) {
@@ -189,6 +191,7 @@ export const useFileNavigation = (initialPath = 'root') => {
     // State
     currentPath,
     files,
+    folders,
     loading,
     error,
     folderStructure,

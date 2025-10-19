@@ -2,10 +2,16 @@
 // This runs in a separate thread to avoid blocking the main UI
 
 let accessToken = null;
+let apiBaseUrl = 'http://localhost:8000/api'; // Default fallback
 let cancelled = false; // shared across messages so cancel propagates
 
 self.onmessage = function(e) {
-  const { type, files, sessionId, batchSize, accessToken: token } = e.data;
+  const { type, files, sessionId, batchSize, accessToken: token, apiBaseUrl: baseUrl } = e.data;
+  
+  // Store API base URL if provided
+  if (baseUrl) {
+    apiBaseUrl = baseUrl;
+  }
   
   // Handle cancellation message
   if (type === 'cancel') {
@@ -56,7 +62,7 @@ self.onmessage = function(e) {
         }
         
         // Get presigned URL
-        const presignedResponse = await fetch('https://datahibernate.in/api/uppy/presigned-url/', {
+        const presignedResponse = await fetch(`${apiBaseUrl}/uppy/presigned-url/`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -132,7 +138,7 @@ self.onmessage = function(e) {
         
         if (uploadResponse.ok) {
           // Mark upload complete
-          const completeResponse = await fetch('https://datahibernate.in/api/uppy/upload-complete/', {
+          const completeResponse = await fetch(`${apiBaseUrl}/uppy/upload-complete/`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
