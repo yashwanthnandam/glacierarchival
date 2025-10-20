@@ -7,7 +7,7 @@ import encryptionService from '../services/encryptionService';
  * Shared hook for file actions (download, archive, restore, delete)
  * Eliminates code duplication across components
  */
-export const useFileActions = (onRefresh) => {
+export const useFileActions = (onRefresh, forceRefresh = false) => {
   const [loading, setLoading] = useState(false);
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [restoreFile, setRestoreFile] = useState(null);
@@ -215,7 +215,7 @@ export const useFileActions = (onRefresh) => {
       
       // Refresh files after bulk action
       if (onRefresh) {
-        await onRefresh();
+        await onRefresh(forceRefresh);
       }
       
       return { success: true, message: `Bulk ${action} completed` };
@@ -235,7 +235,7 @@ export const useFileActions = (onRefresh) => {
       const message = `❄️ ${file.original_filename} is now hibernating! You'll save money on storage costs.`;
       
       if (onRefresh) {
-        await onRefresh();
+        await onRefresh(forceRefresh);
       }
       
       return { success: true, message };

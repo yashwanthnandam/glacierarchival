@@ -30,6 +30,35 @@ self.onmessage = function(e) {
     
     // Token received for authentication
     
+  /**
+   * Calculate optimal concurrency based on average file size
+   * This prevents memory issues with large files
+   */
+  const getOptimalConcurrency = (fileBatch) => {
+    if (!fileBatch || fileBatch.length === 0) return 12;
+    
+    const avgFileSize = fileBatch.reduce((sum, f) => sum + (f.size || 0), 0) / fileBatch.length;
+    const avgSizeMB = avgFileSize / (1024 * 1024);
+    
+    // Small files (< 5 MB avg): Use high concurrency
+    if (avgSizeMB < 5) {
+      return 24; // 24 concurrent for small files (safe for 8GB RAM)
+    }
+    
+    // Medium files (5-20 MB avg): Use moderate concurrency
+    if (avgSizeMB < 20) {
+      return 16; // 16 concurrent for medium files
+    }
+    
+    // Large files (20-50 MB avg): Use low concurrency
+    if (avgSizeMB < 50) {
+      return 12; // 12 concurrent for large files
+    }
+    
+    // Very large files (> 50 MB avg): Use minimal concurrency
+    return 6; // 6 concurrent for very large files
+  };
+    
   // Process files in batches
   const processBatch = async (fileBatch, batchIndex) => {
     const results = [];
@@ -47,7 +76,6 @@ self.onmessage = function(e) {
     try {
       // Check if we have a valid token
       if (!accessToken) {
-        console.error('No access token available for upload');
         return fileBatch.map(fileData => ({
           success: false,
           file: fileData.name,
@@ -64,7 +92,14 @@ self.onmessage = function(e) {
         relativePath: fileData.relativePath
       }));
       
-      // Get bulk presigned URLs using the new endpoint
+      // Calculate optimal concurrency based on file sizes
+      const CONCURRENT_UPLOADS = getOptimalConcurrency(fileBatch);
+      const avgSizeMB = (fileBatch.reduce((sum, f) => sum + (f.size || 0), 0) / fileBatch.length / 1024 / 1024).toFixed(1);
+      const totalSizeMB = (fileBatch.reduce((sum, f) => sum + (f.size || 0), 0) / 1024 / 1024).toFixed(1);
+      
+      
+      // Get bulk presigned URLs using the bulk endpoint
+      const presignedStartTime = performance.now();
       const presignedResponse = await fetch(`${apiBaseUrl}/media-files/get_presigned_urls/`, {
         method: 'POST',
         headers: {
@@ -77,6 +112,9 @@ self.onmessage = function(e) {
         })
       });
       
+      const presignedEndTime = performance.now();
+      const presignedTimeSec = ((presignedEndTime - presignedStartTime) / 1000).toFixed(2);
+      
       // Check for cancellation after API call
       if (cancelled) {
         return fileBatch.map(fileData => ({
@@ -88,7 +126,7 @@ self.onmessage = function(e) {
       }
       
       if (!presignedResponse.ok) {
-        console.error('Bulk presigned URL failed:', presignedResponse.status, await presignedResponse.text());
+        const errorText = await presignedResponse.text();
         return fileBatch.map(fileData => ({
           success: false,
           file: fileData.name,
@@ -99,20 +137,17 @@ self.onmessage = function(e) {
       
       const { results: presignedResults } = await presignedResponse.json();
       
-      // Upload each file using its presigned URL
-      for (let i = 0; i < fileBatch.length; i++) {
-        const fileData = fileBatch[i];
-        const presignedData = presignedResults[i];
-        
-        // Check for cancellation before each file
+      /**
+       * Upload a single file to S3
+       */
+      const uploadFile = async (fileData, presignedData, index) => {
         if (cancelled) {
-          results.push({
+          return {
             success: false,
             file: fileData.name,
             path: fileData.relativePath,
             error: 'Upload cancelled'
-          });
-          continue;
+          };
         }
         
         try {
@@ -120,10 +155,10 @@ self.onmessage = function(e) {
           self.postMessage({
             type: 'progress',
             data: {
-              placeholderId: `batch_${batchIndex}_${i}`,
+              placeholderId: `batch_${batchIndex}_${index}`,
               progress: 50,
               status: 'uploading',
-              fileIndex: batchIndex * 50 + i
+              fileIndex: batchIndex * fileBatch.length + index
             }
           });
           
@@ -134,52 +169,89 @@ self.onmessage = function(e) {
           });
           formData.append('file', fileData.file);
           
+          const uploadStartTime = performance.now();
           const uploadResponse = await fetch(presignedData.presignedUrl.url, {
             method: 'POST',
             body: formData
           });
+          const uploadEndTime = performance.now();
+          const uploadTimeSec = ((uploadEndTime - uploadStartTime) / 1000).toFixed(2);
           
           // Check for cancellation after upload
           if (cancelled) {
-            results.push({
+            return {
               success: false,
               file: fileData.name,
               path: fileData.relativePath,
               error: 'Upload cancelled'
-            });
-            continue;
+            };
           }
           
-          if (uploadResponse.ok) {
-            // File record is already created by the bulk endpoint, no need to call markUploadComplete
-            results.push({
-              success: true,
-              file: fileData.name,
-              path: fileData.relativePath,
-              size: fileData.size
-            });
-          } else {
-            console.error('S3 upload failed:', uploadResponse.status, await uploadResponse.text());
-            results.push({
+          if (!uploadResponse.ok) {
+            const errorText = await uploadResponse.text();
+            return {
               success: false,
               file: fileData.name,
               path: fileData.relativePath,
               error: `Upload failed: ${uploadResponse.status}`
-            });
+            };
           }
+          
+          // File record is already created by the bulk endpoint, no need to call markUploadComplete
+          const fileSizeMB = ((fileData.size || 0) / 1024 / 1024).toFixed(2);
+          const speedMBps = (fileSizeMB / uploadTimeSec).toFixed(2);
+          
+          return {
+            success: true,
+            file: fileData.name,
+            path: fileData.relativePath,
+            size: fileData.size,
+            uploadTime: uploadTimeSec,
+            speed: speedMBps
+          };
+          
         } catch (error) {
-          console.error('Upload error for', fileData.name, ':', error.message);
-          results.push({
+          return {
             success: false,
             file: fileData.name,
             path: fileData.relativePath,
             error: cancelled ? 'Upload cancelled' : error.message
-          });
+          };
+        }
+      };
+      
+      // Process files with ADAPTIVE controlled concurrency
+      const uploadStartTime = performance.now();
+      
+      for (let i = 0; i < fileBatch.length; i += CONCURRENT_UPLOADS) {
+        if (cancelled) break;
+        
+        // Take a chunk of files (up to CONCURRENT_UPLOADS)
+        const chunk = fileBatch.slice(i, i + CONCURRENT_UPLOADS);
+        const chunkPresigned = presignedResults.slice(i, i + CONCURRENT_UPLOADS);
+        
+        // Upload this chunk in parallel
+        const chunkResults = await Promise.all(
+          chunk.map((fileData, idx) => 
+            uploadFile(fileData, chunkPresigned[idx], i + idx)
+          )
+        );
+        
+        results.push(...chunkResults);
+        
+        // Brief pause to avoid overwhelming the browser
+        if (i + CONCURRENT_UPLOADS < fileBatch.length && !cancelled) {
+          await new Promise(r => setTimeout(r, 10));
         }
       }
       
+      const uploadEndTime = performance.now();
+      const totalUploadTimeSec = ((uploadEndTime - uploadStartTime) / 1000).toFixed(2);
+      const successCount = results.filter(r => r.success).length;
+      const failCount = results.filter(r => !r.success).length;
+      const avgSpeed = results.filter(r => r.success && r.speed).reduce((sum, r) => sum + parseFloat(r.speed), 0) / successCount || 0;
+      
     } catch (error) {
-      console.error('Batch processing error:', error.message);
       return fileBatch.map(fileData => ({
         success: false,
         file: fileData.name,
@@ -195,6 +267,7 @@ self.onmessage = function(e) {
   const processAllFiles = async () => {
     try {
       const allResults = [];
+      const overallStartTime = performance.now();
       
       for (let i = 0; i < files.length; i += batchSize) {
         // Check for cancellation before each batch
@@ -231,15 +304,29 @@ self.onmessage = function(e) {
         });
       }
       
+      const overallEndTime = performance.now();
+      const totalTimeSec = ((overallEndTime - overallStartTime) / 1000).toFixed(2);
+      const totalSizeMB = (files.reduce((sum, f) => sum + (f.size || 0), 0) / 1024 / 1024).toFixed(2);
+      const avgSpeedMBps = (totalSizeMB / totalTimeSec).toFixed(2);
+      const successCount = allResults.filter(r => r.success).length;
+      const failCount = allResults.filter(r => !r.success).length;
+      
         // Send final results
         self.postMessage({
           type: 'complete',
           data: {
-            results: allResults
+            results: allResults,
+            stats: {
+              totalFiles: files.length,
+              successCount,
+              failCount,
+              totalSizeMB: parseFloat(totalSizeMB),
+              totalTimeSec: parseFloat(totalTimeSec),
+              avgSpeedMBps: parseFloat(avgSpeedMBps)
+            }
           }
         });
     } catch (error) {
-      console.error('[Web Worker] Error processing files:', error);
       self.postMessage({
         type: 'error',
         data: {

@@ -201,7 +201,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
     downloadInfo, 
     setDownloadDialogOpen,
     setDownloadInfo
-  } = useFileActions(loadFiles);
+  } = useFileActions(loadFiles, true); // Force refresh for all file operations
 
   // Selection management functions
   const toggleFileSelection = (fileId) => {
@@ -462,7 +462,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
       // Clear selection and reload after a short delay
       setTimeout(() => {
         clearSelection();
-        loadFiles();
+        loadFiles(true); // Force refresh after bulk hibernation
         setBulkOperationStatus(null);
         setBulkOperationProgress({});
         setBulkOperationType(null);
@@ -503,7 +503,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
       }
 
       clearSelection();
-      loadFiles(); // Refresh the file list
+      loadFiles(true); // Refresh the file list with cache busting
     } catch (error) {
       console.error('Bulk wake up failed:', error);
     }
@@ -829,16 +829,25 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
       
       
       // Clear selection and reload after a short delay
-      setTimeout(() => {
+      setTimeout(async () => {
         clearSelection();
-        loadFiles();
+        await loadFiles(true); // Force refresh to bypass cache after bulk delete
+        
+        // Also refresh folder structure with cache busting
+        try {
+          const folderResponse = await mediaAPI.getFolderStructure(true);
+          console.log('[Bulk Delete] Folder structure refreshed:', folderResponse.data);
+        } catch (error) {
+          console.error('[Bulk Delete] Failed to refresh folder structure:', error);
+        }
+        
         setBulkOperationStatus(null);
         setBulkOperationProgress({});
         setBulkOperationType(null);
         // Remove completed delete operation from global manager
         uploadManager.queue = uploadManager.queue.filter(q => q.id !== deleteOperationId);
         uploadManager._emit();
-      }, 500); // Reduced from 2000ms to 500ms for faster refresh
+      }, 2000); // Increased to 2000ms to ensure database transaction is committed
       
     } catch (error) {
       console.error('Bulk delete failed:', error);
@@ -931,8 +940,8 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
     if (allUploadsFinished || allUploadsCompleted) {
       timeout = setTimeout(async () => {
         await uploadManager.clearAll();
-        loadFiles();
-      }, 5000);
+        loadFiles(true); // Force refresh after upload completion
+      }, 1000); // Reduced from 5000ms to 1000ms for faster refresh
     }
     
     return () => {
@@ -948,7 +957,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
     return () => clearTimeout(id);
   }, [globalSearchQuery]);
 
-  async function loadFiles() {
+  async function loadFiles(forceRefresh = false) {
     try {
       setLoading(true);
       
@@ -965,6 +974,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
         folder: currentFolder === 'root' ? 'root' : currentFolder,
         search: searchQuery?.trim() || '',
         paginate: false,
+        cacheBust: forceRefresh ? Date.now() : undefined, // Force fresh data after bulk operations
       });
       
       // Check if the response is an error
@@ -1775,13 +1785,13 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
               <Box sx={{ display: 'none' }}>
                 {(() => {
                   const statusCounts = filteredFiles.reduce((acc, file) => {
-                    const config = getFileStateConfig(file.status);
+                    const config = getCentralizedFileStateConfig(file.status);
                     acc[file.status] = (acc[file.status] || 0) + 1;
                     return acc;
                   }, {});
                   
                   return Object.entries(statusCounts).map(([status, count]) => {
-                    const config = getFileStateConfig(status);
+                    const config = getCentralizedFileStateConfig(status);
                     return (
                       <Chip
                         key={status}
@@ -1859,8 +1869,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
                   setShowUploadArea(false);
                   setOverallUploadProgress(0);
                   setOverallUploadLabel('');
-                  loadFiles(); // Refresh the file list
-                  loadFolderStructure(); // Also refresh folder structure
+                  loadFiles(true); // Refresh the file list with cache busting
                 }}
                 onUploadProgress={(progress, fileName) => {
                   setUploadProgress(prev => ({
@@ -2059,7 +2068,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
               
               {/* Then render files */}
               {filteredFiles.map((file) => {
-                const stateConfig = getFileStateConfig(file.status);
+                const stateConfig = getCentralizedFileStateConfig(file.status);
                 const isTransitional = ['archiving', 'restoring'].includes(file.status);
 
                 return (
@@ -2288,13 +2297,13 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
                   Status
                 </Typography>
                 <Chip
-                  icon={getFileStateConfig(selectedFile.status).icon}
-                  label={getFileStateConfig(selectedFile.status).label}
+                  icon={getCentralizedFileStateConfig(selectedFile.status).icon}
+                  label={getCentralizedFileStateConfig(selectedFile.status).label}
                   size="small"
                   sx={{
                     mt: 0.5,
-                    bgcolor: alpha(getFileStateConfig(selectedFile.status).color, 0.1),
-                    color: getFileStateConfig(selectedFile.status).color,
+                    bgcolor: alpha(getCentralizedFileStateConfig(selectedFile.status).color, 0.1),
+                    color: getCentralizedFileStateConfig(selectedFile.status).color,
                     fontWeight: 600,
                   }}
                 />
@@ -2388,7 +2397,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
                   onClick={async () => {
                     try {
                       await handleArchive(selectedFile);
-                      loadFiles(); // Refresh the file list
+                      loadFiles(true); // Refresh the file list with cache busting
                     } catch (error) {
                       console.error('Hibernate failed:', error);
                     }
@@ -2413,7 +2422,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
                       // Directly trigger Standard restore without a dialog
                       await mediaAPI.restoreFile(selectedFile.id, 'Standard');
                       // Refresh to reflect 'restoring' status
-                      await loadFiles();
+                      await loadFiles(true);
                     } catch (error) {
                       console.error('Wake failed:', error);
                     }
@@ -2445,7 +2454,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
                   try {
                     await handleDelete(selectedFile);
                     setSelectedFile(null);
-                    loadFiles(); // Refresh the file list
+                    loadFiles(true); // Refresh the file list with cache busting
                   } catch (error) {
                     console.error('Delete failed:', error);
                   }

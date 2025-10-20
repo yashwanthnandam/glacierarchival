@@ -371,14 +371,19 @@ class MediaFileViewSet(viewsets.ModelViewSet):
         page = int(request.query_params.get('page', 1))
         page_size = int(request.query_params.get('page_size', 50))
         
-        # Create cache key with version for cache invalidation
-        cache_version = cache.get(f"user_cache_version_{user_id}", 0)
-        cache_key = f"files_{user_id}_{folder_path}_{search_query}_{paginate}_{page}_{page_size}_v{cache_version}"
-        
-        # Try to get from cache first
-        cached_result = cache.get(cache_key)
-        if cached_result:
-            return Response(cached_result)
+        # Support cache busting via `_t` param (bypass cache when present)
+        cache_bust = request.query_params.get('_t')
+        if cache_bust:
+            cache_key = f"files_{user_id}_{folder_path}_{search_query}_{paginate}_{page}_{page_size}_bust_{cache_bust}"
+        else:
+            # Create cache key with version for cache invalidation
+            cache_version = cache.get(f"user_cache_version_{user_id}", 0)
+            cache_key = f"files_{user_id}_{folder_path}_{search_query}_{paginate}_{page}_{page_size}_v{cache_version}"
+            
+            # Try to get from cache first (only when not cache-busting)
+            cached_result = cache.get(cache_key)
+            if cached_result:
+                return Response(cached_result)
         
         # Build optimized query
         queryset = MediaFile.objects.filter(
@@ -408,7 +413,7 @@ class MediaFileViewSet(viewsets.ModelViewSet):
                 
                 # Create folder entries for root view
                 for dir_name in sorted(top_level_dirs):
-                    # Count files in this directory
+                    # Count files in this directory (including subdirectories)
                     dir_files = all_files.filter(relative_path__startswith=f"{dir_name}/")
                     dir_file_count = dir_files.count()
                     dir_size = sum(file.file_size for file in dir_files if file.file_size)
@@ -471,8 +476,9 @@ class MediaFileViewSet(viewsets.ModelViewSet):
                 'folders': folders_data
             }
         
-        # Cache for 5 minutes
-        cache.set(cache_key, result, CACHE_TIMEOUTS['files_list'])
+        # Cache for 5 minutes (skip caching when cache-busting)
+        if not cache_bust:
+            cache.set(cache_key, result, CACHE_TIMEOUTS['files_list'])
         
         return Response(result)
 
@@ -480,14 +486,23 @@ class MediaFileViewSet(viewsets.ModelViewSet):
     def folder_structure(self, request):
         """Get folder structure without loading all files"""
         user_id = request.user.id
-        # Create cache key with version for cache invalidation
-        cache_version = cache.get(f"user_cache_version_{user_id}", 0)
-        cache_key = f"folder_structure_{user_id}_v{cache_version}"
         
-        # Try cache first
-        cached_result = cache.get(cache_key)
-        if cached_result:
-            return Response(cached_result)
+        # Check for cache busting parameter
+        cache_bust = request.query_params.get('_t')
+        if cache_bust:
+            # Force fresh data by using a unique cache key
+            cache_key = f"folder_structure_{user_id}_bust_{cache_bust}"
+            print(f"[Folder Structure] Cache bust requested: {cache_bust}")
+        else:
+            # Create cache key with version for cache invalidation
+            cache_version = cache.get(f"user_cache_version_{user_id}", 0)
+            cache_key = f"folder_structure_{user_id}_v{cache_version}"
+        
+        # Try cache first (only if not cache busting)
+        if not cache_bust:
+            cached_result = cache.get(cache_key)
+            if cached_result:
+                return Response(cached_result)
         
         # Get folder structure efficiently
         # Only include files that have a directory path (contains '/') or are in root (empty path)
@@ -549,8 +564,9 @@ class MediaFileViewSet(viewsets.ModelViewSet):
                     current['files'] += folder['file_count']
                     current['size'] += folder['total_size'] or 0
         
-        # Cache for 10 minutes
-        cache.set(cache_key, folder_tree, CACHE_TIMEOUTS['folder_structure'])
+        # Cache for 10 minutes (skip caching when cache-busting)
+        if not cache_bust:
+            cache.set(cache_key, folder_tree, CACHE_TIMEOUTS['folder_structure'])
         
         return Response(folder_tree)
 

@@ -5,12 +5,23 @@ export const API_CONFIG = {
   withCredentials: true, // Send cookies with cross-origin requests
 };
 
+// Detect device capabilities for adaptive upload configuration
+const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+const hasLowMemory = navigator.deviceMemory && navigator.deviceMemory < 4; // Less than 4GB RAM
+
 export const UPLOAD_CONFIG = {
   timeout: 300000, // 5 minutes
-  maxConcurrentUploads: 8, // Increased from 3 to 8 for better throughput
-  bulkBatchSize: 200, // Files per bulk presigned URL request
-  webWorkerBatchSize: 200, // Increased from 100 to 200 for better bulk processing
-  mainBatchSize: 500, // Files per main processing batch
+  
+  // Adaptive batch sizes based on device
+  bulkBatchSize: isMobile || hasLowMemory ? 1000 : 1500, // Files per bulk presigned URL request
+  webWorkerBatchSize: isMobile || hasLowMemory ? 1000 : 1500, // Increased for better bulk processing
+  mainBatchSize: isMobile || hasLowMemory ? 1000 : 1500, // Files per main processing batch
+  
+  // Adaptive concurrency based on device
+  // These are MAX values - actual concurrency adapts to file size in worker
+  maxConcurrentUploads: isMobile ? 12 : hasLowMemory ? 16 : 24, // Maximum concurrent uploads
+  minConcurrentUploads: 6, // Minimum concurrent uploads for very large files
+  
   maxConcurrentWorkers: 4, // Maximum Web Workers running simultaneously
 };
 

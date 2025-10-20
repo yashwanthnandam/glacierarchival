@@ -95,11 +95,12 @@ export const authAPI = {
 
 export const mediaAPI = {
   getFiles: (params = {}) => {
-    // params: { folder, search, paginate }
+    // params: { folder, search, paginate, cacheBust }
     const query = new URLSearchParams();
     if (params.folder !== undefined) query.set('folder', params.folder);
     if (params.search) query.set('search', params.search);
     if (params.paginate === false) query.set('paginate', 'false');
+    if (params.cacheBust) query.set('_t', params.cacheBust);
     return api.get('media-files/list_optimized/', { params: Object.fromEntries(query) });
   },
   
@@ -164,6 +165,12 @@ export const mediaAPI = {
     return api.post('media-files/mark_upload_complete/', {
       file_ids: fileIds
     });
+  },
+
+  // Get folder structure with cache busting
+  getFolderStructure: (cacheBust = false) => {
+    const params = cacheBust ? { _t: Date.now() } : {};
+    return api.get('media-files/folder_structure/', { params });
   }
 };
 
