@@ -91,6 +91,9 @@ log_info "Deploying commit: $CURRENT_COMMIT_SHORT"
 # Step 1: Build frontend locally
 log_info "Building frontend..."
 cd frontend
+# Ensure Vite gets the correct API base URL during build
+VITE_API_BASE_URL=${VITE_API_BASE_URL:-"https://datahibernate.in/api/"} \
+VITE_USE_SECURE_AUTH=${VITE_USE_SECURE_AUTH:-"false"} \
 npm run build
 if [ $? -ne 0 ]; then
     log_error "Frontend build failed"

@@ -106,7 +106,7 @@ export const MESSAGES = {
   SESSION_SIZE_EXCEEDED: 'Upload session size exceeds the limit of 50GB',
   STORAGE_LIMIT_EXCEEDED: 'Storage limit exceeded. Please subscribe to a hibernation plan to continue.',
   MEMORY_LIMIT_EXCEEDED: 'File processing exceeds memory limit. Please upload smaller files.',
-  TOO_MANY_FILES: 'Too many files selected. Maximum 1,000,000 files per upload.',
+  TOO_MANY_FILES: 'Too many files selected. Maximum 100,000 files per upload.',
   INVALID_FILE_TYPE: 'File type not allowed. Please check allowed file types.',
   UPLOAD_CANCELLED: 'Upload cancelled by user',
   UPLOAD_TIMEOUT: 'Upload timeout. Please try again with smaller files.',
