@@ -324,7 +324,8 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10MB
 FILE_UPLOAD_PERMISSIONS = 0o644
 MAX_FILE_SIZE = 5 * 1024 * 1024 * 1024  # 5GB max file size
 MAX_FILES_PER_UPLOAD = 1000  # Max files per upload session
-MAX_CONCURRENT_UPLOADS = 3  # Max concurrent uploads per user
+# Max concurrent uploads per user (configurable via environment)
+MAX_CONCURRENT_UPLOADS = int(os.getenv('MAX_CONCURRENT_UPLOADS', '50'))
 MAX_SESSION_SIZE = 50 * 1024 * 1024 * 1024  # 50GB max session size
 FREE_TIER_LIMIT = 15 * 1024 * 1024 * 1024  # 15GB free tier limit
 

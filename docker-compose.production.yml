@@ -49,6 +49,7 @@ services:
       - AWS_STORAGE_BUCKET_NAME=datahibernate-storage-1760174502
       - AWS_S3_REGION_NAME=ap-south-1
       - REDIS_URL=redis://redis:6379/0
+      - MAX_CONCURRENT_UPLOADS=100
       - EMAIL_HOST=smtpout.secureserver.net
       - EMAIL_PORT=587
       - EMAIL_USE_TLS=true
