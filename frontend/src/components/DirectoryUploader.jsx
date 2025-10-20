@@ -654,9 +654,19 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
             total_files: files.reduce((sum, dir) => sum + dir.files.length, 0)
           }
         });
+        
+        // Still call onUploadComplete even with failures to close upload area
+        if (onUploadComplete) {
+          onUploadComplete();
+        }
       } else {
         setUploadStatus(`Upload completed! ${successfulUploads.length} files uploaded successfully`);
         // Don't show results dialog for successful uploads
+        
+        // Call onUploadComplete callback to notify parent component
+        if (onUploadComplete) {
+          onUploadComplete();
+        }
       }
       
       // Clean up completed items after upload is finished

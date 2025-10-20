@@ -13,6 +13,7 @@ from botocore.exceptions import ClientError
 import uuid
 import os
 from django.core.cache import cache
+from django.conf import settings
 from django.db.models import Q, Count, Sum
 from django.core.paginator import Paginator
 from django.db import transaction
@@ -653,6 +654,32 @@ class MediaFileViewSet(viewsets.ModelViewSet):
     def get_presigned_urls(self, request):
         """Get presigned URLs for uploading files - supports both single file and bulk uploads"""
         try:
+            # Files-in-flight limiter (per user): allow up to MAX_CONCURRENT_UPLOADS * 1000 files
+            user_id = getattr(request.user, 'id', None)
+            files = request.data.get('files', [])
+            if files and user_id:
+                max_concurrent = getattr(settings, 'MAX_CONCURRENT_UPLOADS', 100)
+                max_total_files = max_concurrent * 1000
+                inflight_key = f"user_{user_id}_files_inflight"
+                try:
+                    current_files = cache.get(inflight_key) or 0
+                    
+                    # Check limit
+                    if current_files + len(files) > max_total_files:
+                        return Response({
+                            'error': 'Too many files in flight',
+                            'message': f'Maximum {max_total_files:,} files can be uploaded concurrently',
+                            'current_files': current_files,
+                            'requested_files': len(files),
+                            'max_total_files': max_total_files
+                        }, status=status.HTTP_429_TOO_MANY_REQUESTS)
+                    
+                    # Increment counter
+                    cache.set(inflight_key, current_files + len(files), 3600)
+                    
+                except Exception as e:
+                    # Allow request if rate limiting fails
+                    pass
             # Check if this is a bulk upload request
             files = request.data.get('files', [])
             if files:
@@ -733,9 +760,6 @@ class MediaFileViewSet(viewsets.ModelViewSet):
                 for i, result in enumerate(results):
                     result['fileId'] = str(created_files[i].id)
                 
-                # NOTE: Cache invalidation moved to mark_upload_complete endpoint
-                # This prevents premature cache invalidation before S3 uploads complete
-                
                 return Response({
                     'results': results,
                     'count': len(results),
@@ -777,6 +801,25 @@ class MediaFileViewSet(viewsets.ModelViewSet):
             logger.error(f"Presigned URL generation failed: {str(e)}")
             return Response({'error': f'Failed to generate presigned URLs: {str(e)}'}, 
                           status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        # NO finally block - we decrement in complete_upload_batch endpoint
+
+    @action(detail=False, methods=['post'], parser_classes=[JSONParser])
+    def complete_upload_batch(self, request):
+        """Decrement files-in-flight counter after a batch completes."""
+        try:
+            user_id = getattr(request.user, 'id', None)
+            if not user_id:
+                return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+            completed_files = int(request.data.get('completed_files', 0) or 0)
+            inflight_key = f"user_{user_id}_files_inflight"
+            if completed_files > 0:
+                current = cache.get(inflight_key) or 0
+                new_count = max(0, current - completed_files)
+                cache.set(inflight_key, new_count, 3600)
+                return Response({'success': True, 'remaining_files': new_count})
+            return Response({'success': True, 'remaining_files': cache.get(inflight_key) or 0})
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     @action(detail=False, methods=['post'], parser_classes=[JSONParser])
     def complete_multipart_upload(self, request):
@@ -1486,11 +1529,82 @@ class MediaFileViewSet(viewsets.ModelViewSet):
                 },
                 'failed_files': failed_deletions
             })
-            
+
         except Exception as e:
             return Response({
                 'error': f'Bulk delete failed: {str(e)}'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['post'], parser_classes=[JSONParser])
+    def bulk_archive(self, request):
+        """Archive multiple files in one request."""
+        file_ids = request.data.get('file_ids', [])
+
+        if not file_ids:
+            return Response({'error': 'No file IDs provided'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Only allow archiving uploaded files belonging to user
+        from .models import MediaFile
+        files = MediaFile.objects.filter(id__in=file_ids, user=request.user, is_deleted=False)
+
+        media_service = MediaFileService(request.user)
+
+        succeeded = []
+        failed = []
+        for media_file in files:
+            try:
+                if media_file.status != 'uploaded':
+                    raise ValueError('File must be uploaded before archiving')
+                media_service.archive_file(media_file)
+                succeeded.append(media_file.id)
+            except Exception as e:
+                failed.append({'id': media_file.id, 'error': str(e)})
+
+        return Response({
+            'message': 'Bulk archive completed',
+            'summary': {
+                'total_requested': len(file_ids),
+                'successfully_archived': len(succeeded),
+                'failed': len(failed)
+            },
+            'failed_files': failed
+        })
+
+    @action(detail=False, methods=['post'], parser_classes=[JSONParser])
+    def bulk_restore(self, request):
+        """Restore multiple archived files in one request."""
+        file_ids = request.data.get('file_ids', [])
+        restore_tier = request.data.get('restore_tier', 'Standard')
+
+        if not file_ids:
+            return Response({'error': 'No file IDs provided'}, status=status.HTTP_400_BAD_REQUEST)
+
+        from .models import MediaFile
+        files = MediaFile.objects.filter(id__in=file_ids, user=request.user, is_deleted=False)
+
+        media_service = MediaFileService(request.user)
+
+        succeeded = []
+        failed = []
+        for media_file in files:
+            try:
+                if media_file.status != 'archived':
+                    raise ValueError('File is not archived')
+                media_service.restore_file(media_file, restore_tier)
+                succeeded.append(media_file.id)
+            except Exception as e:
+                failed.append({'id': media_file.id, 'error': str(e)})
+
+        return Response({
+            'message': 'Bulk restore initiated',
+            'summary': {
+                'total_requested': len(file_ids),
+                'successfully_started': len(succeeded),
+                'failed': len(failed),
+                'restore_tier': restore_tier
+            },
+            'failed_files': failed
+        })
 
     @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated])
     def mark_upload_complete(self, request):

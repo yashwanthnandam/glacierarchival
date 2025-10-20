@@ -94,8 +94,35 @@ self.onmessage = function(e) {
         // Calculate optimal concurrency based on file sizes
         const CONCURRENT_UPLOADS = getOptimalConcurrency(fileBatch);
         
-        // Get bulk presigned URLs using the bulk endpoint
-        const presignedResponse = await fetch(`${apiBaseUrl}/media-files/get_presigned_urls/`, {
+        // Retry helper function for network requests
+        const retryFetch = async (url, options, maxRetries = 3) => {
+          for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+              const response = await fetch(url, options);
+              if (response.ok) return response;
+              
+              // Don't retry on 4xx errors (client errors)
+              if (response.status >= 400 && response.status < 500) {
+                return response;
+              }
+              
+              // Retry on 5xx errors
+              if (attempt < maxRetries) {
+                const delay = Math.min(1000 * Math.pow(2, attempt), 10000); // Exponential backoff
+                await new Promise(r => setTimeout(r, delay));
+              } else {
+                return response;
+              }
+            } catch (error) {
+              if (attempt === maxRetries) throw error;
+              const delay = Math.min(1000 * Math.pow(2, attempt), 10000);
+              await new Promise(r => setTimeout(r, delay));
+            }
+          }
+        };
+        
+        // Get bulk presigned URLs using the bulk endpoint with retry logic
+        const presignedResponse = await retryFetch(`${apiBaseUrl}/media-files/get_presigned_urls/`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -105,7 +132,7 @@ self.onmessage = function(e) {
           body: JSON.stringify({
             files: fileMetadata
           })
-        });
+        }, 3); // 3 retries
         
         // Check for cancellation after API call
         if (cancelled) {
@@ -118,8 +145,6 @@ self.onmessage = function(e) {
         }
         
         if (!presignedResponse.ok) {
-          const errorText = await presignedResponse.text();
-          console.error(`[Worker] Bulk presigned URL failed: ${presignedResponse.status}`, errorText);
           return fileBatch.map(fileData => ({
             success: false,
             file: fileData.name,
@@ -181,8 +206,6 @@ self.onmessage = function(e) {
             }
             
             if (!uploadResponse.ok) {
-              const errorText = await uploadResponse.text();
-              console.error(`[Worker] S3 upload failed for ${fileData.name}: ${uploadResponse.status}`, errorText);
               return {
                 success: false,
                 file: fileData.name,
@@ -205,7 +228,6 @@ self.onmessage = function(e) {
             };
             
           } catch (error) {
-            console.error(`[Worker] Upload error for ${fileData.name}:`, error.message);
             return {
               success: false,
               file: fileData.name,
@@ -245,7 +267,6 @@ self.onmessage = function(e) {
         // Totals computed but not logged; results returned to main thread
         
       } catch (error) {
-        console.error('[Worker] Batch processing error:', error.message);
         return fileBatch.map(fileData => ({
           success: false,
           file: fileData.name,
@@ -320,8 +341,26 @@ self.onmessage = function(e) {
             }
           }
         });
+
+        // Decrement files-in-flight counter on backend
+        try {
+          const response = await fetch(`${apiBaseUrl}/media-files/complete_upload_batch/`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${accessToken}`
+            },
+            credentials: 'include',
+            body: JSON.stringify({ completed_files: successCount })
+          });
+          
+          if (!response.ok) {
+            // Still continue - don't fail the upload
+          }
+        } catch (e) {
+          // Still continue - don't fail the upload
+        }
       } catch (error) {
-        console.error('[Web Worker] Error processing files:', error);
         self.postMessage({
           type: 'error',
           data: {

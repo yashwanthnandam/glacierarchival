@@ -325,7 +325,7 @@ FILE_UPLOAD_PERMISSIONS = 0o644
 MAX_FILE_SIZE = 5 * 1024 * 1024 * 1024  # 5GB max file size
 MAX_FILES_PER_UPLOAD = 1000  # Max files per upload session
 # Max concurrent uploads per user (configurable via environment)
-MAX_CONCURRENT_UPLOADS = int(os.getenv('MAX_CONCURRENT_UPLOADS', '50'))
+MAX_CONCURRENT_UPLOADS = int(os.getenv('MAX_CONCURRENT_UPLOADS', '100'))
 MAX_SESSION_SIZE = 50 * 1024 * 1024 * 1024  # 50GB max session size
 FREE_TIER_LIMIT = 15 * 1024 * 1024 * 1024  # 15GB free tier limit
 
@@ -343,10 +343,11 @@ FILE_UPLOAD_MAX_MEMORY_SIZE = 100 * 1024 * 1024  # 100MB per file memory limit
 try:
     import django_redis
     # Redis Configuration for caching and rate limiting
+    REDIS_URL = os.getenv('REDIS_URL', 'redis://redis:6379/0')
     CACHES = {
         'default': {
             'BACKEND': 'django_redis.cache.RedisCache',
-            'LOCATION': 'redis://127.0.0.1:6379/1',
+            'LOCATION': REDIS_URL,
             'OPTIONS': {
                 'CLIENT_CLASS': 'django_redis.client.DefaultClient',
                 'CONNECTION_POOL_KWARGS': {

@@ -196,7 +196,7 @@ class UploadValidationMiddleware(MiddlewareMixin):
         concurrent_key = f"concurrent_uploads_{user_id}"
         current_uploads = cache.get(concurrent_key, 0)
         
-        max_concurrent = getattr(settings, 'MAX_CONCURRENT_UPLOADS', 3)
+        max_concurrent = getattr(settings, 'MAX_CONCURRENT_UPLOADS', 100)
         if current_uploads >= max_concurrent:
             return JsonResponse({
                 'error': 'Too many concurrent uploads',

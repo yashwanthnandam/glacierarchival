@@ -378,9 +378,21 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
 
     // Collect all files to be hibernated
     const allFilesToHibernate = [...selectedFilesList];
+    
+    // For each selected folder, fetch all files within that folder from the API
     for (const folder of selectedFoldersList) {
-      const folderFiles = files.filter(f => f.relative_path?.startsWith(folder.path));
-      allFilesToHibernate.push(...folderFiles);
+      try {
+        const response = await mediaAPI.getFiles({
+          folder: folder.path,
+          paginate: false
+        });
+        
+        if (response.data && Array.isArray(response.data.files)) {
+          allFilesToHibernate.push(...response.data.files);
+        }
+      } catch (error) {
+        // Log but don't fail the operation
+      }
     }
 
     // Filter only files that can be hibernated
@@ -424,31 +436,47 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
         
         setCurrentBatch({ current: batchIndex + 1, total: batches.length });
 
-        // Process batch
-        await Promise.all(batch.map(async (file) => {
-          try {
-            setBulkOperationProgress(prev => ({
-              ...prev,
-              [file.id]: { status: 'in_progress', progress: 50 }
-            }));
+        // Update batch files to in_progress
+        batch.forEach((file) => {
+          setBulkOperationProgress(prev => ({
+            ...prev,
+            [file.id]: { status: 'in_progress', progress: 50 }
+          }));
+        });
 
-            await handleArchive(file);
-            
-            setBulkOperationProgress(prev => ({
-              ...prev,
-              [file.id]: { status: 'completed', progress: 100 }
-            }));
-            
-            successCount++;
-          } catch (error) {
-            console.error(`Failed to hibernate ${file.original_filename}:`, error);
+        // Call bulk archive API for this batch
+        const ids = batch.map(f => f.id);
+        try {
+          const response = await mediaAPI.bulkArchiveFiles(ids);
+          const failed = response?.data?.failed_files || [];
+          const failedIds = new Set(failed.map(f => f.id));
+
+          // Mark successes
+          batch.forEach((file) => {
+            if (!failedIds.has(file.id)) {
+              setBulkOperationProgress(prev => ({
+                ...prev,
+                [file.id]: { status: 'completed', progress: 100 }
+              }));
+              successCount++;
+            } else {
+              setBulkOperationProgress(prev => ({
+                ...prev,
+                [file.id]: { status: 'error', progress: 0 }
+              }));
+              errorCount++;
+            }
+          });
+        } catch (_) {
+          // If the whole batch failed, mark all as error
+          batch.forEach((file) => {
             setBulkOperationProgress(prev => ({
               ...prev,
               [file.id]: { status: 'error', progress: 0 }
             }));
             errorCount++;
-          }
-        }));
+          });
+        }
 
         // Small delay between batches
         if (batchIndex < batches.length - 1) {
@@ -485,20 +513,26 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
     
 
     try {
-      // Wake up selected files (Standard tier, no dialog)
-      for (const file of selectedFilesList) {
-        if (file.status === 'archived') {
-          await mediaAPI.restoreFile(file.id, 'Standard');
-        }
+      // Collect IDs to restore (selected files)
+      const restoreIds = selectedFilesList.filter(f => f.status === 'archived').map(f => f.id);
+
+      // Include files from selected folders
+      for (const folder of selectedFoldersList) {
+        try {
+          const response = await mediaAPI.getFiles({ folder: folder.path, paginate: false });
+          if (response.data && Array.isArray(response.data.files)) {
+            response.data.files.forEach(f => { if (f.status === 'archived') restoreIds.push(f.id); });
+          }
+        } catch (_) { /* ignore */ }
       }
 
-      // For folders, wake up all files in those folders
-      for (const folder of selectedFoldersList) {
-        const folderFiles = files.filter(f => f.relative_path?.startsWith(folder.path));
-        for (const file of folderFiles) {
-          if (file.status === 'archived') {
-            await mediaAPI.restoreFile(file.id, 'Standard');
-          }
+      // Batch restore using bulk endpoint in chunks
+      const BATCH_SIZE = 25;
+      for (let i = 0; i < restoreIds.length; i += BATCH_SIZE) {
+        const batch = restoreIds.slice(i, i + BATCH_SIZE);
+        if (batch.length > 0) {
+          await mediaAPI.bulkRestoreFiles(batch, 'Standard');
+          await new Promise(r => setTimeout(r, 500));
         }
       }
 
@@ -519,9 +553,21 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
 
     // Collect all files to be downloaded
     const allFilesToDownload = [...selectedFilesList];
+    
+    // For each selected folder, fetch all files within that folder from the API
     for (const folder of selectedFoldersList) {
-      const folderFiles = files.filter(f => f.relative_path?.startsWith(folder.path));
-      allFilesToDownload.push(...folderFiles);
+      try {
+        const response = await mediaAPI.getFiles({
+          folder: folder.path,
+          paginate: false
+        });
+        
+        if (response.data && Array.isArray(response.data.files)) {
+          allFilesToDownload.push(...response.data.files);
+        }
+      } catch (error) {
+        // Log but don't fail the operation
+      }
     }
 
     // Filter only files that can be downloaded (not archived files)
@@ -591,24 +637,19 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
           const zipPath = relativePath ? `${relativePath}/${finalFilename}` : finalFilename;
           zip.file(zipPath, fileBlob);
           
-          // Update progress
+          // Update progress (silent)
           const progress = Math.round(((i + 1) / downloadableFiles.length) * 100);
-          console.log(`Added ${finalFilename} to ZIP (${progress}%)`);
           
         } catch (fileError) {
-          console.error(`Failed to process file ${file.original_filename}:`, fileError);
           // Continue with other files instead of failing completely
         }
       }
       
       // Generate ZIP file
-      console.log('Generating ZIP file...');
       const zipBlob = await zip.generateAsync({ type: 'blob' });
-      console.log(`ZIP generated successfully, size: ${zipBlob.size} bytes`);
       
       // Download the ZIP file
       const zipUrl = window.URL.createObjectURL(zipBlob);
-      console.log('Created download URL:', zipUrl);
       
       const link = document.createElement('a');
       link.href = zipUrl;
@@ -616,7 +657,6 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
       link.style.display = 'none';
       
       document.body.appendChild(link);
-      console.log('Triggering download...');
       
       // Trigger download
       link.click();
@@ -624,10 +664,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
       // Fallback: if download doesn't start, try alternative method
       setTimeout(() => {
         // Check if download started by looking for the blob URL
-        if (zipUrl && zipUrl.startsWith('blob:')) {
-          console.log('Download triggered successfully');
-        } else {
-          console.warn('Download may not have started, trying alternative method');
+        if (!(zipUrl && zipUrl.startsWith('blob:'))) {
           // Alternative download method
           const iframe = document.createElement('iframe');
           iframe.style.display = 'none';
@@ -643,7 +680,6 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
       setTimeout(() => {
         document.body.removeChild(link);
         window.URL.revokeObjectURL(zipUrl);
-        console.log('Download cleanup completed');
       }, 2000);
       
       // Signal download completion to the dialog
@@ -653,11 +689,9 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
       setTimeout(() => {
         setDownloadDialogOpen(false);
         clearSelection();
-        console.log(`Bulk download completed: ${downloadableFiles.length} files in ZIP`);
       }, 3000);
       
     } catch (error) {
-      console.error('Bulk download failed:', error);
       setDownloadDialogOpen(false);
       alert(`Bulk download failed: ${error.message}`);
     }

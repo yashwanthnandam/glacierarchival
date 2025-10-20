@@ -189,7 +189,7 @@ def get_upload_limits():
     return {
         "max_file_size": getattr(settings, 'MAX_FILE_SIZE', 5 * 1024 * 1024 * 1024),
         "max_files_per_upload": getattr(settings, 'MAX_FILES_PER_UPLOAD', 1000),
-        "max_concurrent_uploads": getattr(settings, 'MAX_CONCURRENT_UPLOADS', 3),
+        "max_concurrent_uploads": getattr(settings, 'MAX_CONCURRENT_UPLOADS', 100),
         "max_session_size": getattr(settings, 'MAX_SESSION_SIZE', 50 * 1024 * 1024 * 1024),
         "free_tier_limit": getattr(settings, 'FREE_TIER_LIMIT', 15 * 1024 * 1024 * 1024),
         "allowed_file_types": getattr(settings, 'ALLOWED_FILE_TYPES', [])

@@ -109,6 +109,8 @@ export const mediaAPI = {
   restoreFile: (id, restoreTier = 'Standard') => api.post(`media-files/${id}/restore/`, { restore_tier: restoreTier }),
   downloadFile: (id) => api.get(`media-files/${id}/download/`),
   deleteFile: (id) => api.delete(`media-files/${id}/`),
+  bulkArchiveFiles: (fileIds) => api.post('media-files/bulk_archive/', { file_ids: fileIds }),
+  bulkRestoreFiles: (fileIds, restoreTier = 'Standard') => api.post('media-files/bulk_restore/', { file_ids: fileIds, restore_tier: restoreTier }),
   bulkDeleteFiles: (fileIds) => {
     // Create a separate axios instance with longer timeout for bulk deletes
     const bulkDeleteApi = axios.create({
