@@ -19,15 +19,25 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '18'
-        
-    - name: Install and build frontend
+    - name: Setup Node.js and build frontend
       run: |
         cd frontend
         npm ci
+        cat > .env << 'EOF'
+        VITE_API_BASE_URL=https://datahibernate.in/api/
+        VITE_APP_NAME=Data Hibernate
+        VITE_APP_VERSION=1.0.0
+        VITE_DEBUG=false
+        VITE_LOG_LEVEL=warn
+        VITE_USE_SECURE_AUTH=true
+        VITE_CSRF_TRUSTED_ORIGINS=https://datahibernate.in,https://www.datahibernate.in
+        VITE_ENABLE_ANALYTICS=true
+        VITE_ENABLE_OFFLINE_MODE=true
+        VITE_ENABLE_PWA=false
+        VITE_THEME=light
+        VITE_LANGUAGE=en
+        VITE_TIMEZONE=UTC
+        EOF
         npm run build
         
     - name: Commit build files
@@ -37,14 +47,26 @@ jobs:
         git add -f frontend/dist/
         git diff --staged --quiet || git commit -m "Build frontend for deployment [skip ci]"
         
+    - name: Upload frontend build to server
+      uses: appleboy/scp-action@v0.1.4
+      with:
+        host: ${{ env.SERVER_IP }}
+        username: ${{ env.SERVER_USER }}
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        source: "frontend/dist/*"
+        target: "/home/ec2-user/glacierarchival/frontend/dist/"
+        rm: true
+        overwrite: true
+        debug: true
+        
     - name: Deploy to server
       uses: appleboy/ssh-action@v1.0.3
       with:
         host: ${{ env.SERVER_IP }}
         username: ${{ env.SERVER_USER }}
         key: ${{ secrets.SSH_PRIVATE_KEY }}
-        timeout: 15m
-        command_timeout: 10m
+        timeout: 20m
+        command_timeout: 15m
         script: |
           set -e
           cd ${{ env.PROJECT_DIR }}
@@ -53,15 +75,46 @@ jobs:
           git fetch origin
           git reset --hard origin/main
           
+          echo "🔄 Verifying frontend files..."
+          ls -la frontend/dist/
+          echo "Frontend files uploaded successfully"
+          
           echo "🔄 Setting up environment variables..."
           cat > backend/.env << 'EOF'
+          # Production Environment Configuration
+          SECRET_KEY=${{ secrets.SECRET_KEY }}
+          DEBUG=False
+          ALLOWED_HOSTS=datahibernate.in,www.datahibernate.in,localhost,127.0.0.1
+          
+          # CORS Settings
+          CORS_ALLOWED_ORIGINS=https://datahibernate.in,https://www.datahibernate.in
+          CSRF_TRUSTED_ORIGINS=https://datahibernate.in,https://www.datahibernate.in
+          
+          # Email Configuration
+          EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+          EMAIL_HOST=smtpout.secureserver.net
+          EMAIL_PORT=587
+          EMAIL_USE_TLS=True
+          EMAIL_USE_SSL=False
+          EMAIL_HOST_USER=yashwanth@datahibernate.in
+          EMAIL_HOST_PASSWORD=${{ secrets.EMAIL_HOST_PASSWORD }}
+          DEFAULT_FROM_EMAIL=DataHibernate <yashwanth@datahibernate.in>
+          
+          # Frontend URL
+          FRONTEND_URL=https://datahibernate.in
+          
+          # AWS Configuration
           AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          EMAIL_HOST_PASSWORD=${{ secrets.EMAIL_HOST_PASSWORD }}
+          AWS_STORAGE_BUCKET_NAME=datahibernate-storage-1760174502
+          AWS_REGION=ap-south-1
+          
+          # Security
+          ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY }}
+          
+          # Payment Configuration
           RAZORPAY_KEY_ID=${{ secrets.RAZORPAY_KEY_ID }}
           RAZORPAY_KEY_SECRET=${{ secrets.RAZORPAY_KEY_SECRET }}
-          SECRET_KEY=${{ secrets.SECRET_KEY }}
-          ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY }}
           EOF
           
           export AWS_ACCESS_KEY_ID='${{ secrets.AWS_ACCESS_KEY_ID }}'
@@ -86,6 +139,10 @@ jobs:
           
           # Wait for database
           timeout 60 bash -c 'until docker exec glacierarchival-backend-1 python manage.py check --database default 2>/dev/null; do sleep 2; done'
+
+          # Wait for Redis to be ready
+          echo "🔄 Waiting for Redis to be ready..."
+          timeout 30 bash -c 'until docker exec glacierarchival-redis-1 redis-cli ping 2>/dev/null | grep -q PONG; do sleep 2; done' || echo "⚠️ Redis not ready, continuing anyway"
           
           # Run migrations
           docker exec glacierarchival-backend-1 python manage.py migrate

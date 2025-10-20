@@ -10,7 +10,6 @@ __pycache__/
 .Python
 build/
 develop-eggs/
-dist/
 downloads/
 eggs/
 .eggs/
@@ -210,7 +209,6 @@ typings/
 
 # Nuxt.js build / generate output
 .nuxt
-dist
 
 # Gatsby files
 .cache/
@@ -264,8 +262,13 @@ backend/media/
 backend/staticfiles/
 backend/db.sqlite3
 backend/celerybeat-schedule*
-# Frontend build output (allow for deployment)
-# frontend/dist/
+
+
+# Allow frontend dist files specifically (override other dist patterns)
+!frontend/dist/
+!frontend/dist/**
+!frontend/dist/assets/
+!frontend/dist/assets/*
 frontend/node_modules/
 # frontend/package-lock.json
 
@@ -311,7 +314,6 @@ local-testing.env
 
 # Build artifacts
 build/
-dist/
 out/
 
 # Package manager files
