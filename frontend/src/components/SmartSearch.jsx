@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   Box,
   TextField,
@@ -83,6 +83,7 @@ const SmartSearch = ({
   const [popularSearches, setPopularSearches] = useState([]);
   const [searchResults, setSearchResults] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
+  const searchTimeoutRef = useRef(null);
 
   // File type options
   const fileTypes = [
@@ -171,8 +172,21 @@ const SmartSearch = ({
     return [...nameMatches, ...typeMatches, ...statusMatches];
   }, [searchQuery, files]);
 
-  // Perform search
-  const performSearch = (query, filterOptions = filters) => {
+  // Debounced search function
+  const debouncedSearch = useCallback((query, filterOptions) => {
+    // Clear any existing timeout
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+
+    // Set new timeout
+    searchTimeoutRef.current = setTimeout(() => {
+      performSearchInternal(query, filterOptions);
+    }, 300); // 300ms debounce delay
+  }, [files]);
+
+  // Internal search logic (extracted for reuse)
+  const performSearchInternal = useCallback((query, filterOptions = filters) => {
     setIsSearching(true);
     
     let results = [...files];
@@ -242,17 +256,30 @@ const SmartSearch = ({
     if (onSearch) {
       onSearch(results, query, filterOptions);
     }
-  };
+  }, [files, onSearch]);
 
-  // Handle search input change
+  // Public search function (for immediate searches like submit)
+  const performSearch = useCallback((query, filterOptions = filters) => {
+    // Cancel any pending debounced search
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+    performSearchInternal(query, filterOptions);
+  }, [performSearchInternal, filters]);
+
+  // Handle search input change with debouncing
   const handleSearchChange = (event) => {
     const value = event.target.value;
     setSearchQuery(value);
     
     if (value.length >= 2) {
       setShowSuggestions(true);
+      // Trigger debounced search
+      debouncedSearch(value, filters);
     } else {
       setShowSuggestions(false);
+      // Clear search results if query is too short
+      setSearchResults([]);
     }
   };
 
@@ -285,22 +312,35 @@ const SmartSearch = ({
     setShowSuggestions(false);
   };
 
-  // Handle filter change
+  // Handle filter change with debouncing
   const handleFilterChange = (filterType, value) => {
     const newFilters = { ...filters, [filterType]: value };
     setFilters(newFilters);
-    performSearch(searchQuery, newFilters);
+    debouncedSearch(searchQuery, newFilters);
   };
 
   // Clear search
-  const clearSearch = () => {
+  const clearSearch = useCallback(() => {
+    // Cancel any pending search
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
     setSearchQuery('');
     setSearchResults([]);
     setShowSuggestions(false);
     if (onSearch) {
       onSearch(files, '', filters);
     }
-  };
+  }, [files, filters, onSearch]);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Clear filters
   const clearFilters = () => {

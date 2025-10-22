@@ -22,6 +22,8 @@ class UploadManager {
     this._uploadSessionActive = false; // Simple flag to prevent cleanup during uploads
     this._currentSessionTotal = 0; // Fixed total for current upload session
     this._cumulativeCompleted = 0; // Track cumulative completed files across the session
+    this._cumulativeFailed = 0; // Track cumulative failed files across the session
+    this._cumulativeCancelled = 0; // Track cumulative cancelled files across the session
   }
 
   // Throttle utility to limit function calls
@@ -151,7 +153,8 @@ class UploadManager {
       uploadTotal: this._uploadSessionActive ? this._currentSessionTotal : uploadTotal,
       uploadQueued,
       uploadInProgress,
-      uploadFailed,
+      uploadFailed: this._uploadSessionActive ? this._cumulativeFailed : uploadFailed,
+      uploadCancelled: this._uploadSessionActive ? this._cumulativeCancelled : (statusCounts.get('cancelled') || 0),
       uploadCompleted: this._uploadSessionActive ? this._cumulativeCompleted : uploadCompleted,
       items: recentItems,
       deleteOperations: recentDeleteOperations,
@@ -190,11 +193,15 @@ class UploadManager {
     this._uploadSessionActive = true;
     this._currentSessionTotal = totalFiles; // Set stable total at start
     this._cumulativeCompleted = 0; // Reset cumulative completed counter
+    this._cumulativeFailed = 0; // Reset cumulative failed counter
+    this._cumulativeCancelled = 0; // Reset cumulative cancelled counter
   }
   async endUploadSession() { 
     this._uploadSessionActive = false; 
     this._currentSessionTotal = 0; // Reset stable total
     this._cumulativeCompleted = 0; // Reset cumulative completed counter
+    this._cumulativeFailed = 0; // Reset cumulative failed counter
+    this._cumulativeCancelled = 0; // Reset cumulative cancelled counter
     
     // Mark upload as complete and invalidate cache
     try {
@@ -205,7 +212,6 @@ class UploadManager {
       if (completedFileIds.length > 0) {
         const { mediaAPI } = await import('./api');
         await mediaAPI.markUploadComplete(completedFileIds);
-        console.log(`Marked ${completedFileIds.length} files as upload complete`);
       }
     } catch (error) {
       console.error('Failed to mark upload as complete:', error);
@@ -217,6 +223,18 @@ class UploadManager {
   // Method to increment cumulative completed counter (for Web Worker uploads)
   incrementCompleted() {
     this._cumulativeCompleted += 1;
+    this._emitThrottled();
+  }
+
+  // Method to increment cumulative failed counter (for Web Worker uploads)
+  incrementFailed() {
+    this._cumulativeFailed = (this._cumulativeFailed || 0) + 1;
+    this._emitThrottled();
+  }
+
+  // Method to increment cumulative cancelled counter (for Web Worker uploads)
+  incrementCancelled() {
+    this._cumulativeCancelled = (this._cumulativeCancelled || 0) + 1;
     this._emitThrottled();
   }
 
@@ -283,7 +301,6 @@ class UploadManager {
   updatePlaceholder(id, { status, progress, error }) {
     const item = this.queue.find(q => q.id === id);
     if (!item) {
-      console.log(`Placeholder ${id} not found in queue`);
       return;
     }
     // Update placeholder status and progress
@@ -493,8 +510,6 @@ class UploadManager {
       for (let i = 0; i < files.length; i += batchSize) {
         batches.push(files.slice(i, i + batchSize));
       }
-      
-      console.log(`Processing ${files.length} files in ${batches.length} batches of ${batchSize}`);
       
       // Process each batch
       for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {

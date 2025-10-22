@@ -166,7 +166,7 @@ const Login = () => {
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 3 }}>
               <Box
                 component="img"
-                src="/icon.png"
+                src="/icon.svg"
                 alt="DataHibernate Logo"
                 sx={{
                   width: 48,

@@ -21,7 +21,7 @@ scp -i ~/.ssh/datahibernate-key.pem frontend/src/components/ForgotPassword.jsx e
 scp -i ~/.ssh/datahibernate-key.pem frontend/src/components/ResetPassword.jsx ec2-user@$PUBLIC_IP:/home/ec2-user/frontend/src/components/
 scp -i ~/.ssh/datahibernate-key.pem frontend/src/App.jsx ec2-user@$PUBLIC_IP:/home/ec2-user/frontend/src/
 scp -i ~/.ssh/datahibernate-key.pem frontend/index.html ec2-user@$PUBLIC_IP:/home/ec2-user/frontend/
-scp -i ~/.ssh/datahibernate-key.pem frontend/public/icon.png ec2-user@$PUBLIC_IP:/home/ec2-user/frontend/public/
+scp -i ~/.ssh/datahibernate-key.pem frontend/public/icon.svg ec2-user@$PUBLIC_IP:/home/ec2-user/frontend/public/
 scp -i ~/.ssh/datahibernate-key.pem frontend/nginx.conf ec2-user@$PUBLIC_IP:/home/ec2-user/frontend/
 
 # Copy backend files

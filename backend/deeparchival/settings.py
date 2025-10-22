@@ -93,7 +93,6 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'api.security_middleware.RateLimitMiddleware',  # Enhanced rate limiting
     'api.middleware.FileSizeLimitMiddleware',  # File size limits
     'api.middleware.UploadValidationMiddleware',  # Upload validation
     'api.middleware.HibernationPlanMiddleware',  # Hibernation plan enforcement
@@ -124,7 +123,7 @@ WSGI_APPLICATION = 'deeparchival.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('DB_NAME', 'glacierarchival'),
+        'NAME': os.getenv('DB_NAME', 'datahibernate_local'),
         'USER': os.getenv('DB_USER', 'postgres'),
         'PASSWORD': os.getenv('DB_PASSWORD', 'postgres'),
         'HOST': os.getenv('DB_HOST', 'localhost'),
@@ -179,8 +178,8 @@ CORS_ALLOW_HEADERS = [
     'x-requested-with',
 ]
 # Celery Configuration
-CELERY_BROKER_URL = 'redis://localhost:6379/0'
-CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+CELERY_BROKER_URL = os.getenv('REDIS_URL', 'redis://redis:6379/1')
+CELERY_RESULT_BACKEND = os.getenv('REDIS_URL', 'redis://redis:6379/1')
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
@@ -192,17 +191,21 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_TASK_ACKS_LATE = True
 
 # Celery Beat schedule
-# from celery.schedules import crontab
-# CELERY_BEAT_SCHEDULE = {
-#     'sync-restore-status-every-15-min': {
-#         'task': 'api.sync_restore_status',
-#         'schedule': crontab(minute='*/15'),
-#     },
-#     'snapshot-storage-costs-nightly': {
-#         'task': 'api.snapshot_storage_costs',
-#         'schedule': crontab(hour=2, minute=0),
-#     },
-# }
+from celery.schedules import crontab
+CELERY_BEAT_SCHEDULE = {
+    'sync-restore-status-every-15-min': {
+        'task': 'api.sync_restore_status',
+        'schedule': crontab(minute='*/15'),
+    },
+    'snapshot-storage-costs-nightly': {
+        'task': 'api.snapshot_storage_costs',
+        'schedule': crontab(hour=2, minute=0),
+    },
+    'cleanup-stuck-jobs-every-10-min': {
+        'task': 'api.cleanup_stuck_jobs',
+        'schedule': crontab(minute='*/10'),
+    },
+}
 
 # Razorpay Configuration
 import os

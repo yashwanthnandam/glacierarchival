@@ -67,6 +67,94 @@ services:
     command: >
       sh -c "gunicorn deeparchival.wsgi:application --bind 0.0.0.0:8000 --workers 2"
 
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    env_file:
+      - backend/.env
+    environment:
+      - SECRET_KEY=${SECRET_KEY}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - DEBUG=False
+      - ALLOWED_HOSTS=datahibernate.in,www.datahibernate.in,localhost,127.0.0.1
+      - CSRF_TRUSTED_ORIGINS=https://datahibernate.in,https://www.datahibernate.in
+      - DB_HOST=postgres
+      - DB_NAME=datahibernate_prod
+      - DB_USER=postgres
+      - DB_PASSWORD=secure_password_123
+      - DB_PORT=5432
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_STORAGE_BUCKET_NAME=datahibernate-storage-1760174502
+      - AWS_S3_REGION_NAME=ap-south-1
+      - REDIS_URL=redis://redis:6379/0
+      - MAX_CONCURRENT_UPLOADS=100
+      - EMAIL_HOST=smtpout.secureserver.net
+      - EMAIL_PORT=587
+      - EMAIL_USE_TLS=true
+      - EMAIL_USE_SSL=false
+      - EMAIL_HOST_USER=yashwanth@datahibernate.in
+      - EMAIL_HOST_PASSWORD=${EMAIL_HOST_PASSWORD}
+      - DEFAULT_FROM_EMAIL=Data Hibernate Platform <noreply@datahibernate.in>
+      - FRONTEND_URL=https://datahibernate.in
+      - RAZORPAY_KEY_ID=${RAZORPAY_KEY_ID}
+      - RAZORPAY_KEY_SECRET=${RAZORPAY_KEY_SECRET}
+    volumes:
+      - static_files:/app/staticfiles
+      - media_files:/app/media
+    restart: unless-stopped
+    command: celery -A deeparchival worker --loglevel=info --concurrency=2
+
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    env_file:
+      - backend/.env
+    environment:
+      - SECRET_KEY=${SECRET_KEY}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - DEBUG=False
+      - ALLOWED_HOSTS=datahibernate.in,www.datahibernate.in,localhost,127.0.0.1
+      - CSRF_TRUSTED_ORIGINS=https://datahibernate.in,https://www.datahibernate.in
+      - DB_HOST=postgres
+      - DB_NAME=datahibernate_prod
+      - DB_USER=postgres
+      - DB_PASSWORD=secure_password_123
+      - DB_PORT=5432
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_STORAGE_BUCKET_NAME=datahibernate-storage-1760174502
+      - AWS_S3_REGION_NAME=ap-south-1
+      - REDIS_URL=redis://redis:6379/0
+      - MAX_CONCURRENT_UPLOADS=100
+      - EMAIL_HOST=smtpout.secureserver.net
+      - EMAIL_PORT=587
+      - EMAIL_USE_TLS=true
+      - EMAIL_USE_SSL=false
+      - EMAIL_HOST_USER=yashwanth@datahibernate.in
+      - EMAIL_HOST_PASSWORD=${EMAIL_HOST_PASSWORD}
+      - DEFAULT_FROM_EMAIL=Data Hibernate Platform <noreply@datahibernate.in>
+      - FRONTEND_URL=https://datahibernate.in
+      - RAZORPAY_KEY_ID=${RAZORPAY_KEY_ID}
+      - RAZORPAY_KEY_SECRET=${RAZORPAY_KEY_SECRET}
+    volumes:
+      - static_files:/app/staticfiles
+      - media_files:/app/media
+    restart: unless-stopped
+    command: celery -A deeparchival beat --loglevel=info
+
   frontend:
     build:
       context: ./frontend

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, memo } from 'react';
+import React, { useState, useEffect, useMemo, memo, useCallback, useRef } from 'react';
 import {
   Box,
   Typography,
@@ -67,36 +67,65 @@ import {
   Close,
 } from '@mui/icons-material';
 import { keyframes } from '@mui/system';
-import { mediaAPI } from '../services/api';
+import { mediaAPI, hibernationAPI } from '../services/api';
 import { useFileActions } from '../hooks/useFileActions';
 import DirectoryUploader from './DirectoryUploader';
 import DownloadProgressDialog from './DownloadProgressDialog';
 import uploadManager from '../services/uploadManager';
+// Import new components
+import FileGridToolbar from './FileGridToolbar';
+import FileStatusSummary from './FileStatusSummary';
+import BulkOperationProgress from './BulkOperationProgress';
+import FileGrid from './FileGrid';
+// import VirtualizedFileGrid from './VirtualizedFileGrid'; // Temporarily disabled due to react-window import issues
+import FileDetailsPanel from './FileDetailsPanel';
+import FolderDetailsDrawer from './FolderDetailsDrawer';
+import BulkDeleteDialog from './BulkDeleteDialog';
 
-// SIMPLIFIED Upload Progress Bar - Basic progress only
-const UploadProgressBar = memo(({ uploadManagerState }) => {
-  const state = uploadManagerState;
-  if (!state) return null;
+// Helper functions moved outside component for better performance
+const formatFileSize = (bytes) => {
+  if (!bytes) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
+};
+
+const formatDate = (dateString) => {
+  return new Date(dateString).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
+// ULTRA SIMPLE Upload Progress Bar - No flickering
+const UploadProgressBar = memo(({ uploadManagerState, files }) => {
+  // Extract values with defaults - use upload-specific totals for global progress
+  const total = uploadManagerState?.uploadTotal || 0;
+  const completed = uploadManagerState?.uploadCompleted || 0;
+  const failed = uploadManagerState?.uploadFailed || 0;
+  const cancelled = uploadManagerState?.uploadCancelled || 0;
+  const inProgress = uploadManagerState?.uploadInProgress || 0;
+  const queued = uploadManagerState?.uploadQueued || 0;
   
-  // Use global session totals instead of current queue state
-  const total = state.uploadTotal ?? 0;
-  const completed = state.uploadCompleted ?? 0;
-  const active = state.uploadInProgress ?? 0;
-  const queued = state.uploadQueued ?? 0;
+  // Check if there are any files in "uploading" status in the database
+  const dbUploadingFiles = files?.filter(f => f.status === 'uploading') || [];
+  const hasDbUploadingFiles = dbUploadingFiles.length > 0;
   
-  // Only show if there are active uploads
-  if (total === 0 || (active === 0 && queued === 0)) return null;
+  // Calculate percentage based on processed files (completed + failed + cancelled), not just successful
+  const processedRaw = completed + failed + cancelled;
+  const processed = Math.min(processedRaw, total);
+  // Add 10-file buffer: consider complete when within 10 files of total
+  const effectiveProcessed = Math.min(processed + 10, total);
+  const percentage = total > 0 ? Math.floor((effectiveProcessed / total) * 100) : 0;
   
-  const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
-  const remaining = total - completed;
-  
-  // SIMPLIFIED: Only show completed/total files with percentage
-  let statusText = '';
-  if (total > 0) {
-    statusText = `📤 Uploading ${completed}/${total} files (${percentage}%)`;
-  } else {
-    statusText = `✅ Upload completed!`;
-  }
+  // Show progress bar if there's an active upload session OR files actively uploading
+  const hasActiveUploadSession = total > 0 && (inProgress > 0 || queued > 0);
+  const showBar = (hasDbUploadingFiles || hasActiveUploadSession) && percentage < 100;
+  if (!showBar) return null;
   
   const handleCancel = () => {
     uploadManager.cancelAllUploads();
@@ -109,7 +138,12 @@ const UploadProgressBar = memo(({ uploadManagerState }) => {
           <CloudUpload sx={{ color: '#60a5fa' }} />
           <Box sx={{ flex: 1 }}>
             <Typography variant="body2" sx={{ fontWeight: 600 }}>
-              {statusText}
+              📤 Uploading {effectiveProcessed}/{total} files ({percentage}%)
+              {(failed > 0 || cancelled > 0) && (
+                <Typography component="span" variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
+                  {failed > 0 ? `(${failed} failed` : '('}{cancelled > 0 ? `${failed > 0 ? ', ' : ''}${cancelled} cancelled` : ''})
+                </Typography>
+              )}
             </Typography>
             <LinearProgress 
               variant="determinate" 
@@ -132,7 +166,7 @@ const UploadProgressBar = memo(({ uploadManagerState }) => {
   );
 });
 
-const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery }) => {
+const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery, isActive }) => {
   const theme = useTheme();
   // Simplified state management
   const [files, setFiles] = useState([]);
@@ -161,11 +195,10 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
   const [encryptionEnabled, setEncryptionEnabled] = useState(false);
   const showLeftPanel = false; // Hide sidebar for edge-to-edge layout
   
-  // Check if there are active upload operations - memoized to prevent flickering
+  // Disable Upload only when uploads are actively in progress (not just queued/completed)
   const hasUploadOperations = useMemo(() => {
-    return uploadManagerState.total > 0 && 
-      (uploadManagerState.inProgress > 0 || uploadManagerState.queued > 0);
-  }, [uploadManagerState.total, uploadManagerState.inProgress, uploadManagerState.queued]);
+    return uploadManagerState.uploadInProgress > 0;
+  }, [uploadManagerState.uploadInProgress]);
 
   // Memoize upload status text to prevent flickering
   const uploadStatusText = useMemo(() => {
@@ -180,17 +213,6 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
       subtitle: activeTab === 0 ? 'Click here or drag files to upload' : 'Hibernate some files to see them here'
     };
   }, [hasUploadOperations, activeTab]);
-
-  // Debounced upload status text to prevent rapid flickering
-  const [debouncedUploadStatusText, setDebouncedUploadStatusText] = useState(uploadStatusText);
-  
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedUploadStatusText(uploadStatusText);
-    }, 200); // 200ms debounce
-    
-    return () => clearTimeout(timer);
-  }, [uploadStatusText]);
   
   // File actions (archive/delete/download); restore handled inline with Standard tier
   const { 
@@ -203,8 +225,8 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
     setDownloadInfo
   } = useFileActions(loadFiles, true); // Force refresh for all file operations
 
-  // Selection management functions
-  const toggleFileSelection = (fileId) => {
+  // Simple selection functions that don't depend on computed values
+  const toggleFileSelection = useCallback((fileId) => {
     setSelectedFiles(prev => {
       const next = new Set(prev);
       if (next.has(fileId)) {
@@ -214,9 +236,9 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
       }
       return next;
     });
-  };
+  }, []);
 
-  const toggleFolderSelection = (folderPath) => {
+  const toggleFolderSelection = useCallback((folderPath) => {
     setSelectedFolders(prev => {
       const next = new Set(prev);
       if (next.has(folderPath)) {
@@ -226,31 +248,24 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
       }
       return next;
     });
-  };
+  }, []);
 
-  const selectAll = () => {
-    const allFileIds = new Set(filteredFiles.map(f => f.id));
-    const allFolderPaths = new Set(currentFolderSubfolders.map(f => f.path));
-    setSelectedFiles(allFileIds);
-    setSelectedFolders(allFolderPaths);
-  };
-
-  const clearSelection = () => {
+  const clearSelection = useCallback(() => {
     setSelectedFiles(new Set());
     setSelectedFolders(new Set());
-  };
+  }, []);
 
-  const getSelectedCount = () => {
+  const getSelectedCount = useCallback(() => {
     return selectedFiles.size + selectedFolders.size;
-  };
+  }, [selectedFiles.size, selectedFolders.size]);
 
-  const getSelectedFiles = () => {
+  const getSelectedFiles = useCallback(() => {
     return files.filter(f => selectedFiles.has(f.id));
-  };
+  }, [files, selectedFiles]);
 
-  const getSelectedFolders = () => {
+  const getSelectedFolders = useCallback(() => {
     return folders.filter(f => selectedFolders.has(f.path));
-  };
+  }, [folders, selectedFolders]);
 
   // Check for hibernation conflicts
   const checkHibernationConflicts = (selectedFilesList, selectedFoldersList) => {
@@ -283,18 +298,30 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
     return conflicts;
   };
 
-  // Calculate folder status based on file states
-  const getFolderStatus = (folderPath) => {
-    const folderFiles = files.filter(f => f.relative_path?.startsWith(folderPath));
+  // Calculate folder statuses once and memoize for performance
+  const folderStatusMap = useMemo(() => {
+    const map = new Map();
     
-    if (folderFiles.length === 0) return null;
+    folders.forEach(folder => {
+      const folderPath = folder.path;
+      // Prefer precomputed statusCounts from loadFiles when available (root folders)
+      let folderFiles = [];
+      let statusCountsOverride = folder.statusCounts;
+      if (!statusCountsOverride) {
+        folderFiles = files.filter(f => f.relative_path?.startsWith(folderPath));
+        // Only return early if we don't have statusCountsOverride AND no files found
+        if (folderFiles.length === 0) {
+          map.set(folderPath, null);
+          return;
+        }
+      }
     
-    const statusCounts = folderFiles.reduce((acc, file) => {
+      const statusCounts = statusCountsOverride || folderFiles.reduce((acc, file) => {
       acc[file.status] = (acc[file.status] || 0) + 1;
       return acc;
     }, {});
     
-    const totalFiles = folderFiles.length;
+      const totalFiles = statusCountsOverride ? Object.values(statusCounts).reduce((a,b)=>a+b,0) : folderFiles.length;
     const hibernatedCount = statusCounts.archived || 0;
     const hibernatingCount = statusCounts.archiving || 0;
     const restoringCount = statusCounts.restoring || 0;
@@ -305,50 +332,67 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
     
     // Priority: if any are restoring, show waking status at folder level
     if (restoringCount > 0) {
-      return {
+        map.set(folderPath, {
         type: 'restoring',
         count: restoringCount,
         total: totalFiles,
         icon: <WbSunny sx={{ fontSize: 14 }} />,
         color: '#fbbf24',
         label: `${restoringCount} waking`
-      };
+        });
+        return;
     }
     
     if (hibernationRatio >= 0.5) {
       // Majority hibernated - show hibernated status
-      return {
+        map.set(folderPath, {
         type: 'hibernated',
         count: hibernatedCount,
         total: totalFiles,
         icon: <AcUnit sx={{ fontSize: 14 }} />,
         color: '#94a3b8',
         label: `${hibernatedCount}/${totalFiles} hibernated`
-      };
+        });
     } else if (hibernatingCount > 0) {
       // Some hibernating - show hibernating status
-      return {
+        map.set(folderPath, {
         type: 'hibernating',
         count: hibernatingCount,
         total: totalFiles,
         icon: <Schedule sx={{ fontSize: 14 }} />,
         color: '#a78bfa',
         label: `${hibernatingCount} hibernating`
-      };
+        });
     } else if (hibernationRatio > 0) {
       // Some hibernated but not majority - show mixed status
-      return {
+        map.set(folderPath, {
         type: 'mixed',
         count: hibernatedCount,
         total: totalFiles,
         icon: <AcUnit sx={{ fontSize: 14 }} />,
         color: '#64748b',
         label: `${hibernatedCount}/${totalFiles} hibernated`
-      };
-    }
+        });
+      } else {
+        // No hibernation activity; show Active status so users can see state explicitly
+        map.set(folderPath, {
+          type: 'active',
+          count: activeCount,
+          total: totalFiles,
+          icon: <CheckCircle sx={{ fontSize: 14 }} />,
+          color: '#22c55e',
+          label: 'Active'
+        });
+      }
+    });
     
-    return null; // No status indicator needed
-  };
+    return map;
+  }, [files, folders]);
+
+  // Simple lookup function from memoized map
+  const getFolderStatus = useCallback((folderPath) => {
+    return folderStatusMap.get(folderPath) || null;
+  }, [folderStatusMap]);
 
   // Bulk action functions
   const handleBulkHibernate = async () => {
@@ -405,11 +449,28 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
       return;
     }
 
-    // Start progress tracking
-    setBulkOperationType('hibernate');
-    setBulkOperationStatus('in_progress');
-    setBulkOperationProgress({});
+    // Preflight: Ensure user has an active hibernation plan. If not, fail fast
+    try {
+      const planResponse = await hibernationAPI.getCurrentPlan();
+      const planData = planResponse?.data;
+      // If free tier or no plan data returned, block hibernation immediately
+      if (!planData || planData.is_free_tier) {
+        setBulkOperationType('hibernate');
+        setBulkOperationStatus('error'); // BulkOperationProgress will show the plan-required message
+        return;
+      }
+    } catch (_e) {
+      // Any error fetching plan should be treated as no active plan to avoid spamming archive calls
+      setBulkOperationType('hibernate');
+      setBulkOperationStatus('error');
+      return;
+    }
 
+    // Start progress tracking
+        setBulkOperationType('hibernate');
+        setBulkOperationStatus('in_progress');
+        setBulkOperationProgress({});
+        
     // Initialize progress for all files
     hibernatableFiles.forEach(file => {
       setBulkOperationProgress(prev => ({
@@ -421,6 +482,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
     try {
       let successCount = 0;
       let errorCount = 0;
+      let abortDueToPlan = false;
 
       // Process files in batches to avoid overwhelming the server
       const BATCH_SIZE = 10;
@@ -459,7 +521,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
                 [file.id]: { status: 'completed', progress: 100 }
               }));
               successCount++;
-            } else {
+              } else {
               setBulkOperationProgress(prev => ({
                 ...prev,
                 [file.id]: { status: 'error', progress: 0 }
@@ -467,7 +529,11 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
               errorCount++;
             }
           });
-        } catch (_) {
+        } catch (err) {
+          // If plan is required, stop processing further batches and show the message immediately
+          if (err?.response?.status === 402) {
+            abortDueToPlan = true;
+          }
           // If the whole batch failed, mark all as error
           batch.forEach((file) => {
             setBulkOperationProgress(prev => ({
@@ -478,32 +544,47 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
           });
         }
 
+        if (abortDueToPlan) {
+          // Show error immediately and stop further requests
+          setBulkOperationStatus('error');
+          break;
+        }
+
         // Small delay between batches
         if (batchIndex < batches.length - 1) {
           await new Promise(resolve => setTimeout(resolve, 1000));
         }
       }
 
-      // Mark operation as completed
+      // Check if there were any failures and show appropriate message
+      if (errorCount > 0 && successCount === 0) {
+        // All failed - show error
+        setBulkOperationStatus('error');
+      } else if (errorCount > 0) {
+        // Partial success - show warning
+        setBulkOperationStatus('partial');
+      } else {
+        // All succeeded
       setBulkOperationStatus('completed');
+      }
 
       // Clear selection and reload after a short delay
-      setTimeout(() => {
-        clearSelection();
+              setTimeout(() => {
+                clearSelection();
         loadFiles(true); // Force refresh after bulk hibernation
-        setBulkOperationStatus(null);
-        setBulkOperationProgress({});
-        setBulkOperationType(null);
-      }, 2000);
+                setBulkOperationStatus(null);
+                setBulkOperationProgress({});
+                setBulkOperationType(null);
+              }, 2000);
 
     } catch (error) {
       console.error('Bulk hibernation failed:', error);
-      setBulkOperationStatus('error');
-      setTimeout(() => {
-        setBulkOperationStatus(null);
-        setBulkOperationProgress({});
-        setBulkOperationType(null);
-      }, 3000);
+              setBulkOperationStatus('error');
+              setTimeout(() => {
+                setBulkOperationStatus(null);
+                setBulkOperationProgress({});
+                setBulkOperationType(null);
+              }, 3000);
     }
   };
 
@@ -536,7 +617,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
         }
       }
 
-      clearSelection();
+                clearSelection();
       loadFiles(true); // Refresh the file list with cache busting
     } catch (error) {
       console.error('Bulk wake up failed:', error);
@@ -544,6 +625,11 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
   };
 
   const handleBulkDownload = async () => {
+    // Ensure single active download session
+    if (handleBulkDownload.active) return;
+    handleBulkDownload.active = true;
+    const sessionId = Date.now();
+    const lastProgressRef = { current: 0 };
     const selectedFilesList = getSelectedFiles();
     const selectedFoldersList = getSelectedFolders();
     
@@ -592,98 +678,158 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
       });
       setDownloadDialogOpen(true);
 
-      // Create ZIP archive
-      const JSZip = (await import('jszip')).default;
-      const zip = new JSZip();
+      // Get all download URLs in one API call
+      const fileIds = downloadableFiles.map(f => f.id);
+      const bulkResponse = await mediaAPI.bulkDownloadFiles(fileIds);
+      const downloadUrls = bulkResponse.data.download_urls;
 
-      // Download and add files to ZIP
-      for (let i = 0; i < downloadableFiles.length; i++) {
-        const file = downloadableFiles[i];
-        
+      // Try to use Web Worker for better performance with large downloads
+      let useWorker = downloadUrls.length > 10 && typeof Worker !== 'undefined';
+      
+      let zipBlob;
+      
+      if (useWorker) {
         try {
-          // Get download info for this file
-          const response = await mediaAPI.downloadFile(file.id);
-          const { download_url, filename, file_size, is_encrypted, encryption_metadata } = response.data;
+          // Use Web Worker for offloading ZIP creation
+          zipBlob = await new Promise((resolve, reject) => {
+            const worker = new Worker(`/download-worker.js?v=${Date.now()}`);
+            // Attach session id
+            
+            let lastUiProgress = 0;
+            let lastUiTime = 0;
+            worker.onmessage = (event) => {
+              const { type, payload } = event.data;
+              
+              if (type === 'PROGRESS') {
+                const now = Date.now();
+                const next = Math.max(lastProgressRef.current, Math.min(99, payload.progress || 0));
+                if ((next - lastUiProgress >= 1) || (now - lastUiTime >= 100)) {
+                  lastProgressRef.current = next;
+                  lastUiProgress = next;
+                  lastUiTime = now;
+                  setDownloadInfo(prev => ({ ...prev, progress: next, message: payload.message }));
+                }
+              } else if (type === 'COMPLETE') {
+                worker.terminate();
+                resolve(payload.zipBlob);
+              } else if (type === 'ERROR') {
+                worker.terminate();
+                reject(new Error(payload.error));
+              }
+            };
+            
+            worker.onerror = (error) => {
+              worker.terminate();
+              reject(error);
+            };
+            
+            // Start download in worker
+            worker.postMessage({
+              type: 'START_DOWNLOAD',
+              payload: {
+                downloadUrls,
+                encryptionKey: encryptionService.isEnabled() ? true : null,
+                sessionId
+              }
+            });
+          });
+        } catch (workerError) {
+          console.warn('Worker failed, falling back to main thread:', workerError);
+          useWorker = false;
+        }
+      }
+      
+      // Fallback to main thread if worker not available or failed
+      if (!useWorker) {
+        const JSZip = (await import('jszip')).default;
+        const zip = new JSZip();
+
+      // Download files in parallel (with concurrency limit)
+        const CONCURRENCY_LIMIT = 5;
+      const downloadPromises = [];
+      
+      for (let i = 0; i < downloadUrls.length; i += CONCURRENCY_LIMIT) {
+        const batch = downloadUrls.slice(i, i + CONCURRENCY_LIMIT);
+        const batchPromises = batch.map(async (downloadInfo, batchIndex) => {
+          const globalIndex = i + batchIndex;
           
-          // Download the file
-          const fileResponse = await fetch(download_url);
+          if (downloadInfo.error) {
+            console.error(`Download failed for ${downloadInfo.filename}: ${downloadInfo.error}`);
+            return;
+          }
+          
+          try {
+            const fileResponse = await fetch(downloadInfo.download_url);
           if (!fileResponse.ok) {
-            throw new Error(`Failed to download ${filename}: ${fileResponse.status}`);
+              throw new Error(`Failed to download ${downloadInfo.filename}: ${fileResponse.status}`);
           }
           
           let fileBlob = await fileResponse.blob();
-          let finalFilename = filename;
+            let finalFilename = downloadInfo.filename;
           
           // Decrypt file if it's encrypted and encryption is enabled
-          if (is_encrypted && encryption_metadata && encryptionService.isEnabled()) {
+            if (downloadInfo.is_encrypted && downloadInfo.encryption_metadata && encryptionService.isEnabled()) {
             try {
-              const encryptedFile = new File([fileBlob], filename, { type: fileBlob.type });
+                const encryptedFile = new File([fileBlob], downloadInfo.filename, { type: fileBlob.type });
               const decryptedFile = await encryptionService.decryptFileAfterDownload(
                 encryptedFile,
-                encryption_metadata
+                  downloadInfo.encryption_metadata
               );
               fileBlob = decryptedFile;
               finalFilename = decryptedFile.name;
             } catch (decryptionError) {
-              console.error(`Decryption failed for ${filename}:`, decryptionError);
-              throw new Error(`Decryption failed for ${filename}: ${decryptionError.message}`);
+                console.error(`Decryption failed for ${downloadInfo.filename}:`, decryptionError);
+                throw new Error(`Decryption failed for ${downloadInfo.filename}: ${decryptionError.message}`);
             }
-          } else if (is_encrypted && !encryptionService.isEnabled()) {
-            throw new Error(`File ${filename} is encrypted but encryption service is not enabled. Please set up your master password first.`);
+            } else if (downloadInfo.is_encrypted && !encryptionService.isEnabled()) {
+                throw new Error(`File ${downloadInfo.filename} is encrypted but encryption service is not enabled.`);
           }
           
           // Add file to ZIP with proper path structure
-          const relativePath = file.relative_path || '';
+            const relativePath = downloadInfo.relative_path || '';
           const zipPath = relativePath ? `${relativePath}/${finalFilename}` : finalFilename;
           zip.file(zipPath, fileBlob);
           
-          // Update progress (silent)
-          const progress = Math.round(((i + 1) / downloadableFiles.length) * 100);
-          
+              // Update progress
+              const progress = Math.round(((globalIndex + 1) / downloadUrls.length) * 90);
+              setDownloadInfo(prev => ({
+                ...prev,
+                progress,
+                message: `Processing ${globalIndex + 1}/${downloadUrls.length} files...`
+              }));
         } catch (fileError) {
-          // Continue with other files instead of failing completely
+            console.error(`Failed to process ${downloadInfo.filename}:`, fileError);
         }
+        });
+        
+        downloadPromises.push(...batchPromises);
       }
       
+      await Promise.all(downloadPromises);
+      
       // Generate ZIP file
-      const zipBlob = await zip.generateAsync({ type: 'blob' });
+        setDownloadInfo(prev => ({ ...prev, progress: Math.max(lastProgressRef.current, 95), message: 'Creating ZIP...' }));
+        zipBlob = await zip.generateAsync({ type: 'blob' });
+      }
       
       // Download the ZIP file
       const zipUrl = window.URL.createObjectURL(zipBlob);
-      
       const link = document.createElement('a');
       link.href = zipUrl;
       link.download = `download_${Date.now()}.zip`;
       link.style.display = 'none';
       
       document.body.appendChild(link);
-      
-      // Trigger download
       link.click();
       
-      // Fallback: if download doesn't start, try alternative method
-      setTimeout(() => {
-        // Check if download started by looking for the blob URL
-        if (!(zipUrl && zipUrl.startsWith('blob:'))) {
-          // Alternative download method
-          const iframe = document.createElement('iframe');
-          iframe.style.display = 'none';
-          iframe.src = zipUrl;
-          document.body.appendChild(iframe);
-          setTimeout(() => {
-            document.body.removeChild(iframe);
-          }, 2000);
-        }
-      }, 500);
-      
-      // Wait a moment before cleanup
+      // Cleanup
       setTimeout(() => {
         document.body.removeChild(link);
         window.URL.revokeObjectURL(zipUrl);
       }, 2000);
       
-      // Signal download completion to the dialog
-      setDownloadInfo(prev => ({ ...prev, downloadComplete: true }));
+      // Signal download completion
+      setDownloadInfo(prev => ({ ...prev, progress: 100, downloadComplete: true }));
       
       // Close dialog and clear selection after a delay
       setTimeout(() => {
@@ -694,6 +840,9 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
     } catch (error) {
       setDownloadDialogOpen(false);
       alert(`Bulk download failed: ${error.message}`);
+    }
+    finally {
+      handleBulkDownload.active = false;
     }
   };
 
@@ -730,7 +879,6 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
     // For each selected folder, fetch all files within that folder
     for (const folder of selectedFoldersList) {
       try {
-        console.log(`Fetching files for folder: ${folder.path}`);
         const response = await mediaAPI.getFiles({
           folder: folder.path,
           paginate: false
@@ -738,7 +886,6 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
         
         if (response.data && Array.isArray(response.data.files)) {
           allFilesToDelete.push(...response.data.files);
-          console.log(`Found ${response.data.files.length} files in folder ${folder.path}`);
         }
       } catch (error) {
         console.error(`Error fetching files for folder ${folder.path}:`, error);
@@ -746,7 +893,6 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
     }
     
     const fileIds = allFilesToDelete.map(file => file.id);
-    console.log(`Total files to delete: ${fileIds.length}`);
     
     // Add delete operation to global upload manager
     const deleteOperationId = uploadManager.addDeleteOperation(fileIds, 'delete');
@@ -780,8 +926,8 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
       setCurrentBatch({ current: 0, total: batches.length });
       
       let totalDeleted = 0;
-      let totalFailed = 0;
-      
+            let totalFailed = 0;
+            
       // Process each batch
       for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
         const batch = batches[batchIndex];
@@ -816,7 +962,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
                 ...prev,
                 [fileId]: { status: 'error', progress: 0 }
               }));
-            } else {
+              } else {
               setBulkOperationProgress(prev => ({
                 ...prev,
                 [fileId]: { status: 'completed', progress: 100 }
@@ -863,21 +1009,20 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
       
       
       // Clear selection and reload after a short delay
-      setTimeout(async () => {
-        clearSelection();
+              setTimeout(async () => {
+                clearSelection();
         await loadFiles(true); // Force refresh to bypass cache after bulk delete
         
         // Also refresh folder structure with cache busting
         try {
           const folderResponse = await mediaAPI.getFolderStructure(true);
-          console.log('[Bulk Delete] Folder structure refreshed:', folderResponse.data);
         } catch (error) {
           console.error('[Bulk Delete] Failed to refresh folder structure:', error);
         }
         
-        setBulkOperationStatus(null);
-        setBulkOperationProgress({});
-        setBulkOperationType(null);
+                setBulkOperationStatus(null);
+                setBulkOperationProgress({});
+                setBulkOperationType(null);
         // Remove completed delete operation from global manager
         uploadManager.queue = uploadManager.queue.filter(q => q.id !== deleteOperationId);
         uploadManager._emit();
@@ -885,29 +1030,45 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
       
     } catch (error) {
       console.error('Bulk delete failed:', error);
-      setBulkOperationStatus('error');
+              setBulkOperationStatus('error');
       uploadManager.updateDeleteOperation(deleteOperationId, { 
         status: 'failed', 
         progress: 0, 
         error: error.message 
       });
-      setTimeout(() => {
-        setBulkOperationStatus(null);
-        setBulkOperationProgress({});
-        setBulkOperationType(null);
+              setTimeout(() => {
+                setBulkOperationStatus(null);
+                setBulkOperationProgress({});
+                setBulkOperationType(null);
         // Remove failed delete operation from global manager
         uploadManager.queue = uploadManager.queue.filter(q => q.id !== deleteOperationId);
         uploadManager._emit();
-      }, 3000);
+              }, 3000);
     }
   };
 
-  // Load files
+  // Load files on component mount
   useEffect(() => {
     loadFiles();
+  }, []); // Empty dependency array = run only on mount
+
+  // Load files when component becomes active (tab switch)
+  useEffect(() => {
+    if (isActive) {
+      loadFiles(true); // Force refresh when switching to this tab
+    }
+  }, [isActive]);
+
+  // Load files when folder or search changes
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+    loadFiles(true); // Force refresh when folder changes to avoid cached empty results
+    }, 100); // Small delay to batch rapid changes
+    
+    return () => clearTimeout(timeoutId);
   }, [currentFolder, searchQuery]);
 
-  // Check encryption status
+  // Check encryption status (reduced frequency)
   useEffect(() => {
     const checkEncryptionStatus = () => {
       const status = encryptionService.getEncryptionStatus();
@@ -916,82 +1077,78 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
     
     checkEncryptionStatus();
     
-    // Listen for encryption status changes
-    const interval = setInterval(checkEncryptionStatus, 1000);
+    // Check every 5 seconds instead of every second
+    const interval = setInterval(checkEncryptionStatus, 5000);
     return () => clearInterval(interval);
   }, []);
 
-  // Keep upload area/progress visible if uploads are queued or in progress
+  // ULTRA SIMPLE upload manager subscription - No flickering
   useEffect(() => {
     let unsub;
-    let lastStateHash = '';
-    let throttleTimer = null;
+    let lastUpdateTime = 0;
+    const UPDATE_INTERVAL = 500; // Only update every 500ms
     
     uploadManager.init().then(() => {
+      // Get initial state
+      const currentState = uploadManager.getState();
+      if (currentState) {
+        setUploadManagerState(currentState);
+      }
+      
       unsub = uploadManager.subscribe((state) => {
         if (!state) return;
         
-        // Create a hash of relevant state to prevent unnecessary updates
-        const stateHash = `${state.total}-${state.completed}-${state.inProgress}-${state.queued}-${state.failed}`;
+        const now = Date.now();
         
-        // Only update if state actually changed
-        if (stateHash !== lastStateHash) {
-          lastStateHash = stateHash;
-          
-          // Throttle state updates to prevent flickering
-          if (throttleTimer) {
-            clearTimeout(throttleTimer);
-          }
-          
-          throttleTimer = setTimeout(() => {
+        // Only update if enough time has passed OR if uploads just started/stopped
+        const isUploadActive = state.uploadInProgress > 0 || state.uploadQueued > 0;
+        const wasUploadActive = uploadManagerState.uploadInProgress > 0 || uploadManagerState.uploadQueued > 0;
+        const uploadStateChanged = isUploadActive !== wasUploadActive;
+        
+        if (uploadStateChanged || (now - lastUpdateTime) >= UPDATE_INTERVAL) {
+          lastUpdateTime = now;
             setUploadManagerState(state);
-            throttleTimer = null;
-          }, 500); // Reduced to 500ms for smoother updates
         }
       });
     });
     
     return () => {
       unsub?.();
-      if (throttleTimer) {
-        clearTimeout(throttleTimer);
-      }
     };
   }, []);
 
-  // Auto-clear logic for completed or cancelled uploads
+  // Auto-clear when upload session is finished (no queued/inProgress)
   useEffect(() => {
-    let timeout;
     const state = uploadManagerState;
     if (!state) return;
-    const { inProgress, queued, completed, total } = state;
-    
-    // Trigger auto-clear when uploads are fully completed OR cancelled
-    // This includes: completed === total OR (inProgress === 0 && queued === 0 && completed > 0)
-    const allUploadsFinished = inProgress === 0 && queued === 0 && completed > 0;
-    const allUploadsCompleted = completed === total;
-    
-    if (allUploadsFinished || allUploadsCompleted) {
-      timeout = setTimeout(async () => {
-        await uploadManager.clearAll();
-        loadFiles(true); // Force refresh after upload completion
-      }, 1000); // Reduced from 5000ms to 1000ms for faster refresh
-    }
-    
-    return () => {
-      if (timeout) clearTimeout(timeout);
-    };
-  }, [uploadManagerState?.inProgress, uploadManagerState?.queued, uploadManagerState?.completed, uploadManagerState?.total]);
 
-  // Debounced sync from global search (optimised)
+    const uploadsFinished = state.uploadTotal > 0 && state.uploadInProgress === 0 && state.uploadQueued === 0;
+    if (uploadsFinished) {
+      const timeout = setTimeout(async () => {
+        await uploadManager.clearAll();
+        if (!showUploadArea) {
+          loadFiles(true);
+        }
+      }, 1200);
+
+      return () => clearTimeout(timeout);
+    }
+  }, [uploadManagerState?.uploadTotal, uploadManagerState?.uploadInProgress, uploadManagerState?.uploadQueued, showUploadArea]);
+
+  // Sync from global search (optimized)
   useEffect(() => {
     const id = setTimeout(() => {
       setSearchQuery(globalSearchQuery || '');
-    }, 200);
+    }, 100); // Reduced from 200ms
     return () => clearTimeout(id);
   }, [globalSearchQuery]);
 
   async function loadFiles(forceRefresh = false) {
+    // Prevent multiple simultaneous calls
+    if (loading && !forceRefresh) {
+      return;
+    }
+    
     try {
       setLoading(true);
       
@@ -1072,7 +1229,8 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
               path: folderPath,
               parent: 'root',
               fileCount: file.fileCount || 0,
-              size: file.size || 0
+              size: file.size || 0,
+              isCalculated: false
             });
           } else {
             // Nested folder
@@ -1085,11 +1243,21 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
                   path: folderPath,
                   parent: currentPath,
                   fileCount: 0,
-                  size: 0
+                  size: 0,
+                  isCalculated: true
                 });
               }
               currentPath = folderPath;
             });
+
+          // Apply API-provided counts to the final nested folder node
+          const finalFolder = folderMap.get(currentPath);
+          if (finalFolder) {
+            finalFolder.fileCount = file.fileCount || finalFolder.fileCount || 0;
+            finalFolder.size = file.size || finalFolder.size || 0;
+            // Mark as API-provided so we don't double-count during aggregation
+            finalFolder.isCalculated = false;
+          }
           }
           return; // Skip processing as a regular file
         }
@@ -1139,9 +1307,8 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
           const folderPath = currentPath === 'root' ? part : `${currentPath}/${part}`;
           const folder = folderMap.get(folderPath);
           if (folder) {
-            // Only add stats if this folder doesn't already have API data
-            // (API folders have fileCount > 0 or size > 0, calculated folders start at 0)
-            if (folder.fileCount === 0 && folder.size === 0) {
+            // Sum into calculated folders, or any folder that currently has no totals
+            if (folder.isCalculated || (!folder.fileCount && !folder.size)) {
               folder.fileCount += 1;
               folder.size += file.file_size || 0;
             }
@@ -1166,10 +1333,15 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
               });
               
               const folderFiles = response.data.files || [];
-              const totalFiles = folderFiles.filter(f => f.file_type !== 'folder').length;
-              const totalSize = folderFiles
+              const contentFiles = folderFiles.filter(f => f.file_type !== 'folder');
+              const totalFiles = contentFiles.length;
+              const totalSize = contentFiles
                 .filter(f => f.file_type !== 'folder')
                 .reduce((sum, f) => sum + (f.file_size || 0), 0);
+              const statusCounts = contentFiles.reduce((acc, f) => {
+                acc[f.status] = (acc[f.status] || 0) + 1;
+                return acc;
+              }, {});
               
               // Update the folder stats
               const folderPath = folder.original_filename;
@@ -1177,12 +1349,13 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
               if (folderEntry) {
                 folderEntry.fileCount = totalFiles;
                 folderEntry.size = totalSize;
+                folderEntry.statusCounts = statusCounts;
               }
               
-              return { folderPath, fileCount: totalFiles, size: totalSize };
+              return { folderPath, fileCount: totalFiles, size: totalSize, statusCounts };
             } catch (error) {
               console.error(`Error getting stats for folder ${folder.original_filename}:`, error);
-              return { folderPath: folder.original_filename, fileCount: 0, size: 0 };
+              return { folderPath: folder.original_filename, fileCount: 0, size: 0, statusCounts: {} };
             }
           });
         
@@ -1223,24 +1396,9 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
           // Show files in root (empty relative_path)
           return !path || path === '';
         } else {
-          // Show files DIRECTLY in the current folder (not in subfolders)
-          const folderPath = currentFolder;
-          
-          // File is directly in this folder if:
-          // 1. Path exactly matches the folder path (file is the folder itself)
-          // 2. Path starts with folderPath + '/' and the next part has no more slashes
-          if (path === folderPath) {
-            return true; // This is the folder itself
-          }
-          
-          if (path.startsWith(folderPath + '/')) {
-            // Get the part after the folder path
-            const afterFolder = path.substring(folderPath.length + 1);
-            // Check if this is a direct child (no more slashes in the remaining path)
-            return afterFolder.indexOf('/') === -1;
-          }
-          
-          return false;
+          // A file is directly in this folder if its relative_path exactly equals the folder path
+          // Do NOT include files in subfolders (those have relative_path starting with `${folderPath}/...`)
+          return path === currentFolder;
         }
       });
     }
@@ -1262,28 +1420,16 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
     return result;
   }, [folders, currentFolder, searchQuery]);
 
-  // Format file size
-  const formatFileSize = (bytes) => {
-    if (!bytes) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
-  };
+  // selectAll defined here after filteredFiles and currentFolderSubfolders
+  const selectAll = useCallback(() => {
+    const allFileIds = new Set(filteredFiles.map(f => f.id));
+    const allFolderPaths = new Set(currentFolderSubfolders.map(f => f.path));
+    setSelectedFiles(allFileIds);
+    setSelectedFolders(allFolderPaths);
+  }, [filteredFiles, currentFolderSubfolders]);
 
-  // Format date
-  const formatDate = (dateString) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  };
-
-  // Handle folder toggle
-  const handleFolderToggle = (folderPath) => {
+  // Handle folder toggle - memoized
+  const handleFolderToggle = useCallback((folderPath) => {
     setExpandedFolders((prev) => {
       const next = new Set(prev);
       if (next.has(folderPath)) {
@@ -1293,7 +1439,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
       }
       return next;
     });
-  };
+  }, []);
 
   // Render folder tree recursively
   const renderFolderTree = (parentPath = 'root', level = 0) => {
@@ -1497,382 +1643,63 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
       }}>
 
         {/* Breadcrumb & Tabs */}
-        <Box
-          sx={{
-            borderBottom: `1px solid ${alpha(theme.palette.divider, 0.1)}`,
-            bgcolor: alpha('#ffffff', 0.5),
+        <FileGridToolbar
+          currentFolder={currentFolder}
+          onFolderSelect={(path) => {
+            setCurrentFolder(path);
+            onFolderSelect?.(path);
           }}
-        >
-          {/* Breadcrumb + Actions */}
-          <Box sx={{ px: 0, pt: 1.5, pb: 1 }}>
-            <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" sx={{ flexWrap: 'nowrap', gap: 1, overflowX: 'auto' }}>
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ flex: '0 0 auto', whiteSpace: 'nowrap' }}>
-              <Home
-                fontSize="small"
-                sx={{ color: 'text.secondary', cursor: 'pointer' }}
-                onClick={() => {
-                  setCurrentFolder('root');
-                  onFolderSelect?.('root');
-                }}
-              />
-              {currentFolder !== 'root' &&
-                currentFolder.split('/').filter((p) => p !== 'root').map((part, index, arr) => {
-                  const pathToHere = arr.slice(0, index + 1).join('/');
-                  return (
-                    <React.Fragment key={pathToHere}>
-                      <NavigateNext fontSize="small" sx={{ color: 'text.secondary' }} />
-                      <Typography
-                        variant="body2"
-              sx={{ 
-                          color: index === arr.length - 1 ? 'primary.main' : 'text.secondary',
-                          fontWeight: index === arr.length - 1 ? 600 : 400,
-                          cursor: 'pointer',
-                            '&:hover': { textDecoration: 'underline' },
-                            whiteSpace: 'nowrap'
-                        }}
-                        onClick={() => {
-                          setCurrentFolder(pathToHere);
-                          onFolderSelect?.(pathToHere);
-                        }}
-                      >
-                        {part}
-                      </Typography>
-                    </React.Fragment>
-                  );
-                })}
-              </Stack>
-
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ flex: '0 0 auto', whiteSpace: 'nowrap' }}>
-                {currentFolder !== 'root' && (
-                  <Tooltip title="Folder Details">
-                    <IconButton size="small" onClick={() => setShowFolderDetails(true)}>
-                      <Info fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
-                )}
-                {/* In-panel Search */}
-                <TextField
-                  size="small"
-                  placeholder="Search files..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  sx={{ minWidth: { xs: 160, md: 240 } }}
-                />
-                {/* Upload */}
-              <Tooltip title="Upload Files">
-                <Button
-                    size="small"
-                  startIcon={<CloudUpload />}
-                  onClick={() => setShowUploadArea(true)}
-                  disabled={hasUploadOperations}
-                    sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
-                >
-                  Upload
-                </Button>
-              </Tooltip>
-                {/* New Folder */}
-              <Tooltip title="Create Folder">
-                <Button
-                    size="small"
-                  startIcon={<CreateNewFolder />}
-                    onClick={async () => {
+          showFolderDetails={showFolderDetails}
+          setShowFolderDetails={setShowFolderDetails}
+          searchQuery={searchQuery}
+          setSearchQuery={setSearchQuery}
+          setShowUploadArea={setShowUploadArea}
+          hasUploadOperations={hasUploadOperations}
+          onCreateFolder={useCallback(async () => {
                       const folderName = prompt('Enter folder name:');
                       if (folderName && folderName.trim()) {
                         try {
                           const response = await mediaAPI.createFolder(folderName.trim(), currentFolder === 'root' ? '' : currentFolder);
                           alert(`Folder "${folderName.trim()}" created successfully!`);
                           // Refresh the file list to show the new folder
-                          window.location.reload();
+                await loadFiles(true);
                         } catch (error) {
                           const errorMessage = error.response?.data?.error || 'Failed to create folder';
                           alert(`Error: ${errorMessage}`);
                         }
                       }
-                    }}
-                    sx={{ textTransform: 'none', fontWeight: 600 }}
-                >
-                  New Folder
-                </Button>
-              </Tooltip>
-                {/* Select All */}
-              <Box sx={{ display: 'flex', alignItems: 'center', mr: 1 }}>
-                <Checkbox
-                  checked={getSelectedCount() > 0 && getSelectedCount() === (filteredFiles.length + currentFolderSubfolders.length)}
-                  indeterminate={getSelectedCount() > 0 && getSelectedCount() < (filteredFiles.length + currentFolderSubfolders.length)}
-                  onChange={(e) => {
-                    if (e.target.checked) {
-                      selectAll();
-                    } else {
-                      clearSelection();
-                    }
-                  }}
-                  size="small"
-                  sx={{
-                    color: 'primary.main',
-                      '&.Mui-checked': { color: 'primary.main' },
-                  }}
-                />
-                <Typography variant="body2" sx={{ color: 'text.secondary', ml: 0.5 }}>
-                  Select All
-                </Typography>
-              </Box>
-                <Tooltip title="Refresh">
-                  <IconButton onClick={loadFiles} size="small" sx={{ flex: '0 0 auto' }}>
-                    <Refresh fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-
-              {getSelectedCount() > 0 && (
-                <>
-                  <Tooltip title={`Download ${getSelectedCount()} items`}>
-                    <IconButton
-                      onClick={handleBulkDownload}
-                        size="small"
-                      sx={{
-                        bgcolor: alpha('#3b82f6', 0.1),
-                        '&:hover': { bgcolor: alpha('#3b82f6', 0.2) },
-                      }}
-                    >
-                      <CloudDownload sx={{ color: '#3b82f6' }} />
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip title={`Hibernate ${getSelectedCount()} items`}>
-                    <IconButton
-                      onClick={handleBulkHibernate}
-                        size="small"
-                      sx={{
-                        bgcolor: alpha('#a78bfa', 0.1),
-                        '&:hover': { bgcolor: alpha('#a78bfa', 0.2) },
-                      }}
-                    >
-                      <Bedtime sx={{ color: '#a78bfa' }} />
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip title={`Wake up ${getSelectedCount()} items`}>
-                    <IconButton
-                      onClick={handleBulkWakeUp}
-                        size="small"
-                      sx={{
-                        bgcolor: alpha('#fbbf24', 0.1),
-                        '&:hover': { bgcolor: alpha('#fbbf24', 0.2) },
-                      }}
-                    >
-                      <WbSunny sx={{ color: '#fbbf24' }} />
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip title={`Delete ${getSelectedCount()} items`}>
-                    <IconButton
-                      onClick={handleBulkDelete}
-                        size="small"
-                      sx={{
-                        bgcolor: alpha('#ef4444', 0.1),
-                        '&:hover': { bgcolor: alpha('#ef4444', 0.2) },
-                      }}
-                    >
-                      <Delete sx={{ color: '#ef4444' }} />
-                    </IconButton>
-                  </Tooltip>
-                </>
-              )}
-            </Stack>
-            </Stack>
-          </Box>
-
-          {/* Removed redundant All Files tabs for cleaner UI */}
-        </Box>
+          }, [currentFolder])}
+          getSelectedCount={getSelectedCount}
+          filteredFiles={filteredFiles}
+          currentFolderSubfolders={currentFolderSubfolders}
+          selectAll={selectAll}
+          clearSelection={clearSelection}
+          onRefresh={loadFiles}
+          handleBulkDownload={handleBulkDownload}
+          handleBulkHibernate={handleBulkHibernate}
+          handleBulkWakeUp={handleBulkWakeUp}
+          handleBulkDelete={handleBulkDelete}
+        />
 
         {/* Global Compact Upload Progress - Memoized for Performance */}
-        <UploadProgressBar uploadManagerState={uploadManagerState} />
+        <UploadProgressBar uploadManagerState={uploadManagerState} files={files} />
 
         {/* Enhanced Delete Progress */}
-        {(() => {
-          const deleteOps = uploadManagerState.deleteOperations || [];
-          const activeDeleteOp = deleteOps.find(op => op && op.status === 'deleting');
-          if (!activeDeleteOp) return null;
-          
-          const total = activeDeleteOp.totalFiles || 0;
-          const completed = activeDeleteOp.completedFiles || 0;
-          const hasActivity = total > 0;
-          if (!hasActivity) return null;
-          const overall = total > 0 ? Math.round((completed / total) * 100) : 0;
-          const remaining = total - completed;
-          
-          return (
-            <Fade in={true} timeout={150}>
-              <Box sx={{ px: { xs: 2, md: 3 }, pt: 1.5 }}>
-                <Paper sx={{ 
-                  p: 2, 
-                  border: `1px solid ${alpha('#f59e0b', 0.2)}`,
-                  background: `linear-gradient(135deg, ${alpha('#f59e0b', 0.05)} 0%, ${alpha('#f59e0b', 0.02)} 100%)`,
-                  boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-                  transition: 'all 0.15s ease'
-                }}>
-                  <Stack direction="row" alignItems="center" spacing={2}>
-                    <Box sx={{ 
-                      p: 1, 
-                      borderRadius: '50%', 
-                      bgcolor: alpha('#f59e0b', 0.1),
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center'
-                    }}>
-                      <Delete sx={{ color: '#f59e0b', fontSize: 20 }} />
-                    </Box>
-                    
-                    <Box sx={{ flex: 1 }}>
-                      <Typography variant="body2" sx={{ fontWeight: 600, color: '#f59e0b' }}>
-                        🗑️ Deleting {remaining} of {total} files
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
-                        {completed} completed • {remaining} remaining
-                      </Typography>
-                    </Box>
-                    
-                    <Typography 
-                      variant="caption" 
-                      sx={{ 
-                        fontWeight: 600,
-                        color: '#f59e0b',
-                        bgcolor: alpha('#f59e0b', 0.1),
-                        px: 1.5,
-                        py: 0.5,
-                        borderRadius: 1
-                      }}
-                    >
-                      {overall}%
-                    </Typography>
-                  </Stack>
-                  <LinearProgress 
-                    variant="determinate" 
-                    value={overall} 
-                    sx={{ 
-                      mt: 1.5, 
-                      height: 8, 
-                      borderRadius: 4,
-                      bgcolor: alpha('#f59e0b', 0.1),
-                      '& .MuiLinearProgress-bar': {
-                        bgcolor: '#f59e0b',
-                        borderRadius: 4
-                      }
-                    }} 
-                  />
-                </Paper>
-              </Box>
-            </Fade>
-          );
-        })()}
+        <BulkOperationProgress 
+          uploadManagerState={uploadManagerState}
+          bulkOperationStatus={bulkOperationStatus}
+          bulkOperationType={bulkOperationType}
+        />
 
         {/* File Grid/List or Upload Area */}
       <Box sx={{ flex: 1, overflow: 'auto', pt: { xs: 2, md: 3 }, pr: { xs: 2, md: 2 }, pb: { xs: 2, md: 3 }, pl: { xs: 2, md: 3 } }}>
           {/* Status Summary */}
-          {filteredFiles.length > 0 && (
-            <Paper sx={{ p: 2.5, mb: 3, bgcolor: 'background.paper', border: `1px solid ${alpha(theme.palette.divider, 0.1)}` }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
-                <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                📊 File Status Summary
-              </Typography>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                {encryptionEnabled ? (
-                  <Chip
-                    icon={<Lock />}
-                    label="E2E Encryption Enabled"
-                    size="small"
-                    color="success"
-                    variant="outlined"
-                  />
-                ) : (
-                  <Chip
-                    icon={<LockOpen />}
-                    label="E2E Encryption Disabled"
-                    size="small"
-                    color="default"
-                    variant="outlined"
-                  />
-                )}
-              </Box>
-                {(() => {
-                  const statusCounts = filteredFiles.reduce((acc, file) => {
-                    acc[file.status] = (acc[file.status] || 0) + 1;
-                    return acc;
-                  }, {});
-                  return (
-                    <Stack direction="row" spacing={1} alignItems="center">
-                      <Chip
-                        label={`Hibernated: ${statusCounts.archived || 0}`}
-                        size="small"
-                        sx={{ bgcolor: alpha('#94a3b8', 0.15), color: '#475569', fontWeight: 600 }}
-                      />
-                      <Chip
-                        label={`Hibernating: ${statusCounts.archiving || 0}`}
-                        size="small"
-                        sx={{ bgcolor: alpha('#a78bfa', 0.15), color: '#6b21a8', fontWeight: 600 }}
-                      />
-                      <Chip
-                        label={`Awake Mode: ${((statusCounts.uploaded || 0) + (statusCounts.restored || 0))}`}
-                        size="small"
-                        sx={{ bgcolor: alpha('#60a5fa', 0.15), color: '#0c4a6e', fontWeight: 600 }}
-                      />
-                    </Stack>
-                  );
-                })()}
-              </Box>
-              <Box sx={{ display: 'none' }}>
-                {(() => {
-                  const statusCounts = filteredFiles.reduce((acc, file) => {
-                    const config = getCentralizedFileStateConfig(file.status);
-                    acc[file.status] = (acc[file.status] || 0) + 1;
-                    return acc;
-                  }, {});
-                  
-                  return Object.entries(statusCounts).map(([status, count]) => {
-                    const config = getCentralizedFileStateConfig(status);
-                    return (
-                      <Chip
-                        key={status}
-                        icon={config.icon}
-                        label={`${config.label}: ${count}`}
-                        size="small"
-                        sx={{
-                          bgcolor: alpha(config.color, 0.1),
-                          color: config.color,
-                          fontWeight: 600,
-                          border: `1px solid ${alpha(config.color, 0.3)}`,
-                        }}
-                      />
-                    );
-                  });
-                })()}
-              </Box>
-            </Paper>
-          )}
+          <FileStatusSummary 
+            filteredFiles={filteredFiles}
+            encryptionEnabled={encryptionEnabled}
+          />
 
-          {bulkOperationStatus === 'completed' && (
-            <Box sx={{ mb: 4 }}>
-              <Paper sx={{ p: 2.5, bgcolor: alpha('#f3f4f6', 0.3), border: '1px solid', borderColor: '#6b7280' }}>
-                <Stack direction="row" alignItems="center" spacing={2}>
-                  <CheckCircle sx={{ color: '#6b7280' }} />
-                  <Typography variant="h6" sx={{ fontWeight: 600, color: '#374151' }}>
-                    Deletion Completed Successfully!
-                  </Typography>
-                </Stack>
-              </Paper>
-            </Box>
-          )}
-
-          {bulkOperationStatus === 'error' && (
-            <Box sx={{ mb: 4 }}>
-              <Paper sx={{ p: 2.5, bgcolor: alpha('#fee2e2', 0.3), border: '1px solid', borderColor: '#ef4444' }}>
-                <Stack direction="row" alignItems="center" spacing={2}>
-                  <Error sx={{ color: '#ef4444' }} />
-                  <Typography variant="h6" sx={{ fontWeight: 600, color: '#991b1b' }}>
-                    Some files failed to delete
-                  </Typography>
-                </Stack>
-              </Paper>
-            </Box>
-          )}
-
-          {showUploadArea && !hasUploadOperations ? (
+          {showUploadArea ? (
             <Box>
               {/* Upload Header */}
               <Box sx={{ mb: 4, p: 2.5, bgcolor: alpha('#f0f9ff', 0.5), borderRadius: 2 }}>
@@ -1920,657 +1747,67 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery 
                 defaultRelativePath={currentFolder === 'root' ? '' : currentFolder}
               />
             </Box>
-          ) : loading ? (
+          ) : null}
+          
+          {!showUploadArea && loading ? (
             <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
 <LinearProgress sx={{ width: '50%' }} />
             </Box>
-          ) : (() => {
-            const shouldShowUpload = filteredFiles.length === 0 && currentFolderSubfolders.length === 0 && !searchQuery;
-            return shouldShowUpload;
-          })() ? (
-            <Box
-              sx={{
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                height: '100%',
-                gap: 2,
-                cursor: 'pointer',
-                borderRadius: 3,
-                border: `2px dashed ${alpha('#60a5fa', 0.3)}`,
-                bgcolor: alpha('#f0f9ff', 0.3),
-                transition: 'all 0.3s',
-                '&:hover': {
-                  borderColor: '#60a5fa',
-                  bgcolor: alpha('#f0f9ff', 0.5),
-                  transform: 'scale(1.02)',
-                },
-                ...(hasUploadOperations && {
-                  opacity: 0.5,
-                  pointerEvents: 'none',
-                  cursor: 'not-allowed'
-                })
+          ) : !showUploadArea ? (
+            <FileGrid
+              currentFolderSubfolders={currentFolderSubfolders}
+              filteredFiles={filteredFiles}
+              selectedFolders={selectedFolders}
+              selectedFiles={selectedFiles}
+              toggleFolderSelection={toggleFolderSelection}
+              toggleFileSelection={toggleFileSelection}
+              onFolderClick={(path) => {
+                setCurrentFolder(path);
+                onFolderSelect?.(path);
               }}
-              onClick={() => {
-                if (!hasUploadOperations) {
-                  setShowUploadArea(true);
-                }
-              }}
-            >
-              <CloudUpload sx={{ fontSize: 80, color: alpha('#60a5fa', 0.5) }} />
-              <Typography variant="h6" color="text.secondary">
-                {debouncedUploadStatusText.title}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                {debouncedUploadStatusText.subtitle}
-              </Typography>
-              {activeTab === 0 && (
-                <Button
-                  variant="contained"
-                  startIcon={<CloudUpload />}
-                  sx={{
-                    mt: 2,
-                    bgcolor: '#60a5fa',
-                    '&:hover': { bgcolor: '#3b82f6' },
-                    textTransform: 'none',
-                    fontWeight: 600,
-                  }}
-                >
-                  Upload Files
-                </Button>
-              )}
-            </Box>
-          ) : (
-            <Grid container spacing={2}>
-              {/* Render subfolders first */}
-              {currentFolderSubfolders.map((folder) => (
-                <Grid item xs={12} sm={6} md={3} lg={2} xl={2} key={`folder-${folder.path}`}>
-                  <Fade in timeout={300}>
-                    <Card
-                      sx={{
-                        height: '100%',
-                        cursor: 'pointer',
-                        transition: 'all 0.3s',
-                        background: 'background.paper',
-                        border: `1px solid ${alpha('#60a5fa', 0.2)}`,
-                        position: 'relative',
-                        '&:hover': {
-                          transform: 'translateY(-4px)',
-                          boxShadow: `0 8px 24px ${alpha('#60a5fa', 0.2)}`,
-                          borderColor: '#60a5fa',
-                        },
-                        ...(selectedFolders.has(folder.path) && {
-                          borderColor: '#60a5fa',
-                          bgcolor: alpha('#60a5fa', 0.1),
-                        }),
-                      }}
-                      onClick={(e) => {
-                        // Don't navigate if clicking on checkbox
-                        if (e.target.type === 'checkbox') return;
-                        
-                        setCurrentFolder(folder.path);
-                        onFolderSelect?.(folder.path);
-                        handleFolderToggle(folder.path);
-                      }}
-                    >
-                      {/* Selection Checkbox */}
-                      <Box
-                        sx={{
-                          position: 'absolute',
-                          top: 8,
-                          right: 8,
-                          zIndex: 1,
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <Checkbox
-                          checked={selectedFolders.has(folder.path)}
-                          onChange={() => toggleFolderSelection(folder.path)}
-                          size="small"
-                          sx={{
-                            color: '#60a5fa',
-                            '&.Mui-checked': {
-                              color: '#60a5fa',
-                            },
-                          }}
-                        />
-                      </Box>
-                      <CardContent sx={{ px: 1.5, py: 1.5 }}>
-                        <Stack spacing={1.5}>
-                          {/* Folder Icon */}
-                          <Box
-                            sx={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              height: 80,
-                              borderRadius: 2,
-                              background: `linear-gradient(135deg, ${alpha('#60a5fa', 0.1)}, ${alpha('#a78bfa', 0.1)})`,
-                            }}
-                          >
-                            <FolderOpen sx={{ fontSize: 48, color: '#60a5fa' }} />
-                          </Box>
-                          
-                          {/* Folder Info */}
-                          <Box>
-                            <Typography
-                              variant="body2"
-                              sx={{
-                                fontWeight: 600,
-                                mb: 0.25,
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
-                              }}
-                            >
-                              {folder.name}
-                            </Typography>
-                            <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1 }}>
-                              {folder.fileCount} files • {formatFileSize(folder.size)}
-                            </Typography>
-                          </Box>
-
-                          {/* Folder Status Indicator */}
-                          {(() => {
-                            const folderStatus = getFolderStatus(folder.path);
-                            if (!folderStatus) return null;
-                            
-                            return (
-                              <Chip
-                                icon={folderStatus.icon}
-                                label={folderStatus.label}
-                                size="small"
-                                sx={{
-                                  bgcolor: alpha(folderStatus.color, 0.1),
-                                  color: folderStatus.color,
-                                  fontWeight: 600,
-                                  borderRadius: 1.5,
-                                  border: `1px solid ${alpha(folderStatus.color, 0.3)}`,
-                                  fontSize: '0.75rem',
-                                  height: 24,
-                                }}
-                              />
-                            );
-                          })()}
-                        </Stack>
-                      </CardContent>
-                    </Card>
-                  </Fade>
-                </Grid>
-              ))}
-              
-              {/* Then render files */}
-              {filteredFiles.map((file) => {
-                const stateConfig = getCentralizedFileStateConfig(file.status);
-                const isTransitional = ['archiving', 'restoring'].includes(file.status);
-
-                return (
-                  <Grid item xs={12} sm={6} md={3} lg={2} xl={2} key={file.id}>
-                    <Fade in timeout={300}>
-                      <Card
-                        sx={{
-                          height: '100%',
-                          cursor: 'pointer',
-                          transition: 'all 0.3s',
-                          background: 'background.paper',
-                          border: `1px solid ${alpha(stateConfig.color, 0.2)}`,
-                          position: 'relative',
-                          '&:hover': {
-                            transform: 'translateY(-4px)',
-                            boxShadow: `0 8px 24px ${alpha(stateConfig.color, 0.2)}`,
-                            borderColor: stateConfig.color,
-                          },
-                          ...(stateConfig.glow && {
-                            animation: `${glow} 2s infinite`,
-                            boxShadow: `0 0 20px ${alpha(stateConfig.color, 0.3)}`,
-                          }),
-                          ...(selectedFiles.has(file.id) && {
-                            borderColor: stateConfig.color,
-                            bgcolor: alpha(stateConfig.color, 0.1),
-                          }),
-                        }}
-                        onClick={(e) => {
-                          // Don't open file details if clicking on checkbox
-                          if (e.target.type === 'checkbox') return;
-                          
+              onFileClick={(file) => {
                           setSelectedFile(file);
                           onFileSelect?.(file, 'view');
                         }}
-                      >
-                        {/* Selection Checkbox */}
-                        <Box
-                          sx={{
-                            position: 'absolute',
-                            top: 8,
-                            right: 8,
-                            zIndex: 1,
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <Checkbox
-                            checked={selectedFiles.has(file.id)}
-                            onChange={() => toggleFileSelection(file.id)}
-                            size="small"
-                            sx={{
-                              color: stateConfig.color,
-                              '&.Mui-checked': {
-                                color: stateConfig.color,
-                              },
-                            }}
-                          />
-                        </Box>
-                        <CardContent>
-                          <Stack spacing={1.5}>
-                            {/* File Icon with State */}
-                            <Box
-                              sx={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                height: 80,
-                                borderRadius: 2,
-                                background: `linear-gradient(135deg, ${alpha(
-                                  stateConfig.color,
-                                  0.1
-                                )} 0%, ${alpha(stateConfig.color, 0.05)} 100%)`,
-                                position: 'relative',
-                                overflow: 'hidden',
-                              }}
-                            >
-                              <InsertDriveFile
-                                sx={{
-                                  fontSize: 48,
-                                  color: stateConfig.color,
-                                  ...(stateConfig.animation && {
-                                    animation: `${stateConfig.animation} 2s infinite`,
-                                  }),
-                                }}
-                              />
-                              {isTransitional && (
-                                <LinearProgress
-                                  sx={{
-                                    position: 'absolute',
-                                    bottom: 0,
-                                    left: 0,
-                                    right: 0,
-                                    height: 3,
-                                    bgcolor: alpha(stateConfig.color, 0.1),
-                                    '& .MuiLinearProgress-bar': {
-                                      bgcolor: stateConfig.color,
-                                    },
-                                  }}
-                                />
-                              )}
-                            </Box>
-
-                            {/* File Name */}
-                            <Tooltip title={file.original_filename}>
-                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                <Typography
-                                  variant="body2"
-                                  sx={{
-                                    fontWeight: 600,
-                                    overflow: 'hidden',
-                                    textOverflow: 'ellipsis',
-                                    whiteSpace: 'nowrap',
-                                  }}
-                                >
-                                  {file.original_filename}
-                                </Typography>
-                                {file.is_encrypted && (
-                                  <Tooltip title="Encrypted with E2E encryption">
-                                    <Lock sx={{ fontSize: 12, color: 'success.main' }} />
-                                  </Tooltip>
-                                )}
-                              </Box>
-                            </Tooltip>
-
-                            {/* File Info */}
-                            <Stack spacing={0}>
-                              <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1 }}>
-                                {formatFileSize(file.file_size)}
-                              </Typography>
-                            </Stack>
-
-                            {/* Status Chip */}
-                            <Chip
-                              icon={stateConfig.icon}
-                              label={stateConfig.label}
-                              size="small"
-                              sx={{
-                                bgcolor: alpha(stateConfig.color, 0.1),
-                                color: stateConfig.color,
-                                fontWeight: 600,
-                                borderRadius: 1.5,
-                              }}
-                            />
-                          </Stack>
-                        </CardContent>
-                      </Card>
-                    </Fade>
-                  </Grid>
-                );
-              })}
-            </Grid>
-          )}
+              handleFolderToggle={handleFolderToggle}
+              formatFileSize={formatFileSize}
+              getFolderStatus={getFolderStatus}
+            />
+          ) : null}
         </Box>
       </Box>
 
       {/* Right Info Panel (if file selected) */}
-      {selectedFile && (
-        <Slide direction="left" in={!!selectedFile} mountOnEnter unmountOnExit>
-          <Paper
-            elevation={0}
-            sx={{
-              width: { xs: '100%', lg: 320 },
-              height: { xs: 'auto', lg: '100%' },
-              maxHeight: { xs: '400px', lg: 'none' },
-              borderRadius: 0,
-              borderLeft: { xs: 'none', lg: `1px solid ${alpha(theme.palette.divider, 0.1)}` },
-              borderTop: { xs: `1px solid ${alpha(theme.palette.divider, 0.1)}`, lg: 'none' },
-              background: 'background.paper',
-              display: 'flex',
-              flexDirection: 'column',
-              p: 3,
-              gap: 2,
-              flexShrink: 0,
-              overflow: 'auto',
-            }}
-          >
-            {/* Close Button */}
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Typography variant="h6" sx={{ fontWeight: 700 }}>
-                File Details
-              </Typography>
-              <IconButton size="small" onClick={() => setSelectedFile(null)}>
-                <ChevronRight />
-              </IconButton>
-            </Box>
-
-            {/* File Preview */}
-            <Box
-              sx={{
-                height: 150,
-                borderRadius: 2,
-                background: `linear-gradient(135deg, ${alpha('#60a5fa', 0.1)} 0%, ${alpha(
-                  '#a78bfa',
-                  0.1
-                )} 100%)`,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              <InsertDriveFile sx={{ fontSize: 64, color: '#60a5fa' }} />
-            </Box>
-
-            {/* File Name */}
-            <Typography variant="body1" sx={{ fontWeight: 600, wordBreak: 'break-word' }}>
-              {selectedFile.original_filename}
-            </Typography>
-
-            <Divider />
-
-            {/* File Properties */}
-            <Stack spacing={2}>
-              <Box>
-                <Typography variant="caption" color="text.secondary">
-                  Size
-                </Typography>
-                <Typography variant="body2">{formatFileSize(selectedFile.file_size)}</Typography>
-              </Box>
-              <Box>
-                <Typography variant="caption" color="text.secondary">
-                  Uploaded
-                </Typography>
-                <Typography variant="body2">{formatDate(selectedFile.uploaded_at)}</Typography>
-              </Box>
-              <Box>
-                <Typography variant="caption" color="text.secondary">
-                  Status
-                </Typography>
-                <Chip
-                  icon={getCentralizedFileStateConfig(selectedFile.status).icon}
-                  label={getCentralizedFileStateConfig(selectedFile.status).label}
-                  size="small"
-                  sx={{
-                    mt: 0.5,
-                    bgcolor: alpha(getCentralizedFileStateConfig(selectedFile.status).color, 0.1),
-                    color: getCentralizedFileStateConfig(selectedFile.status).color,
-                    fontWeight: 600,
-                  }}
-                />
-              </Box>
-              {selectedFile.glacier_archive_id && (
-                <Box>
-                  <Typography variant="caption" color="text.secondary">
-                    Archive ID
-                  </Typography>
-                  <Typography
-                    variant="caption"
-                    sx={{
-                      display: 'block',
-                      mt: 0.5,
-                      fontFamily: 'monospace',
-                      bgcolor: alpha('#f1f5f9', 0.5),
-                      p: 1,
-                      borderRadius: 1,
-                      wordBreak: 'break-all',
-                    }}
-                  >
-                    {selectedFile.glacier_archive_id}
-                  </Typography>
-                </Box>
-              )}
-            </Stack>
-
-            {/* File Upload Status (if folder containing this file is uploading) */}
-            {(() => {
-              const items = uploadManagerState.items || [];
-              const folderPath = selectedFile?.relative_path || '';
-              if (!folderPath) return null;
-              // Filter only upload operations to prevent jumping totals
-              const uploadItems = items.filter(i => i.operationType === 'upload' || !i.operationType);
-              const related = uploadItems.filter(i => {
-                const rp = i.relativePath || '';
-                return rp === folderPath || rp.startsWith(folderPath + '/') || rp.startsWith(folderPath);
-              });
-              const total = related.length;
-              const completed = related.filter(i => i.status === 'completed').length;
-              const inProgress = related.filter(i => i.status === 'uploading').length;
-              const queued = related.filter(i => i.status === 'queued').length;
-              const hasActivity = total > 0 && (inProgress > 0 || queued > 0);
-              const avgProgress = total > 0 ? Math.round(related.reduce((s, i) => s + (i.progress || 0), 0) / total) : 0;
-              const pct = total > 0 ? Math.max(avgProgress, Math.round((completed / total) * 100)) : 0;
-              const starting = inProgress === 0 && queued > 0;
-              if (!hasActivity && pct === 0) return null;
-              return (
-                <Box>
-                  <Typography variant="caption" color="text.secondary">
-                    Upload Status
-                  </Typography>
-                  <Stack direction="row" alignItems="center" spacing={1} sx={{ mt: 0.5 }}>
-                    <CloudUpload sx={{ color: '#60a5fa' }} />
-                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                      {starting ? 'Starting uploads…' : `Uploading ${Math.max(Math.floor((total - completed) / 100) * 100, 0)} of ${total} files`}
-                    </Typography>
-                  </Stack>
-                  {starting ? (
-                    <LinearProgress variant="indeterminate" sx={{ mt: 1, height: 8, borderRadius: 4 }} />
-                  ) : (
-                    <>
-                      <LinearProgress variant="determinate" value={pct} sx={{ mt: 1, height: 8, borderRadius: 4 }} />
-                      <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
-                        {pct}% complete • {inProgress} in progress • {queued} queued • {completed} completed
-                      </Typography>
-                    </>
-                  )}
-                </Box>
-              );
-            })()}
-
-            <Divider />
-
-            {/* Actions */}
-            <Stack spacing={1}>
-              <Button
-                fullWidth
-                variant="outlined"
-                startIcon={<CloudDownload />}
-                sx={{ textTransform: 'none', fontWeight: 600 }}
-                onClick={() => handleDownload(selectedFile)}
-              >
-                Download
-              </Button>
-              {selectedFile.status === 'uploaded' && (
-                <Button
-                  fullWidth
-                  variant="outlined"
-                  startIcon={<Bedtime />}
-                  onClick={async () => {
-                    try {
-                      await handleArchive(selectedFile);
-                      loadFiles(true); // Refresh the file list with cache busting
-                    } catch (error) {
-                      console.error('Hibernate failed:', error);
-                    }
-                  }}
-                  sx={{
-                    textTransform: 'none',
-                    fontWeight: 600,
-                    color: '#a78bfa',
-                    borderColor: '#a78bfa',
-                  }}
-                >
-                  Hibernate
-                </Button>
-              )}
-              {selectedFile.status === 'archived' && (
-                <Button
-                  fullWidth
-                  variant="outlined"
-                  startIcon={<WbSunny />}
-                  onClick={async () => {
-                    try {
-                      // Directly trigger Standard restore without a dialog
-                      await mediaAPI.restoreFile(selectedFile.id, 'Standard');
-                      // Refresh to reflect 'restoring' status
-                      await loadFiles(true);
-                    } catch (error) {
-                      console.error('Wake failed:', error);
-                    }
-                  }}
-                  sx={{
-                    textTransform: 'none',
-                    fontWeight: 600,
-                    color: '#fbbf24',
-                    borderColor: '#fbbf24',
-                  }}
-                >
-                  Wake Up
-                </Button>
-              )}
-              <Button
-                fullWidth
-                variant="outlined"
-                startIcon={<Share />}
-                sx={{ textTransform: 'none', fontWeight: 600 }}
-              >
-                Share
-              </Button>
-              <Button
-                fullWidth
-                variant="outlined"
-                color="error"
-                startIcon={<Delete />}
-                onClick={async () => {
-                  try {
-                    await handleDelete(selectedFile);
-                    setSelectedFile(null);
-                    loadFiles(true); // Refresh the file list with cache busting
-                  } catch (error) {
-                    console.error('Delete failed:', error);
-                  }
-                }}
-                sx={{ textTransform: 'none', fontWeight: 600 }}
-              >
-                Delete
-              </Button>
-            </Stack>
-          </Paper>
-        </Slide>
-      )}
+      <FileDetailsPanel
+        selectedFile={selectedFile}
+        onClose={() => setSelectedFile(null)}
+        formatFileSize={formatFileSize}
+        formatDate={formatDate}
+        handleDownload={handleDownload}
+        handleArchive={handleArchive}
+        handleRestore={async (file) => {
+          await mediaAPI.restoreFile(file.id, 'Standard');
+          await loadFiles(true);
+        }}
+        handleDelete={handleDelete}
+        loadFiles={loadFiles}
+        uploadManagerState={uploadManagerState}
+      />
 
       {/* Right Folder Details Drawer (when inside a folder) */}
-      {(() => {
-        if (selectedFile || currentFolder === 'root') return null;
-        const open = showFolderDetails; // Progress moved to global banner
-        return (
-          <Drawer anchor="right" open={open} onClose={() => setShowFolderDetails(false)} sx={{ zIndex: (theme) => theme.zIndex.drawer + 1 }}>
-            <Box sx={{ width: { xs: 320, sm: 360 }, p: 3, display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Typography variant="h6" sx={{ fontWeight: 700 }}>
-                  Folder Details
-                </Typography>
-                <IconButton size="small" onClick={() => setShowFolderDetails(false)}>
-                  <ChevronRight />
-                </IconButton>
-              </Box>
-              <Box sx={{
-                height: 120,
-                borderRadius: 2,
-                background: `linear-gradient(135deg, ${alpha('#60a5fa', 0.1)} 0%, ${alpha('#a78bfa', 0.1)} 100%)`,
-                display: 'flex', alignItems: 'center', justifyContent: 'center'
-              }}>
-                <FolderOpen sx={{ fontSize: 64, color: '#60a5fa' }} />
-              </Box>
-              <Typography variant="body1" sx={{ fontWeight: 600, wordBreak: 'break-word' }}>
-                {currentFolder}
-              </Typography>
-              <Divider />
-              {/* Upload progress moved to global banner */}
-            </Box>
-          </Drawer>
-        );
-      })()}
+      <FolderDetailsDrawer
+        open={showFolderDetails && !selectedFile}
+        onClose={() => setShowFolderDetails(false)}
+        currentFolder={currentFolder}
+      />
 
       {/* Bulk Delete Confirmation Dialog */}
-      <Dialog
+      <BulkDeleteDialog
         open={bulkDeleteDialog.open}
+        count={bulkDeleteDialog.count}
         onClose={() => setBulkDeleteDialog({ open: false, count: 0 })}
-        maxWidth="sm"
-        fullWidth
-      >
-        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Delete color="error" />
-          Confirm Bulk Delete
-        </DialogTitle>
-        <DialogContent>
-          <Typography variant="body1">
-            Are you sure you want to delete <strong>{bulkDeleteDialog.count}</strong> items?
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-            This action cannot be undone. All selected files and folders will be permanently removed.
-          </Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button
-            onClick={() => setBulkDeleteDialog({ open: false, count: 0 })}
-            color="inherit"
-          >
-            Cancel
-          </Button>
-          <Button
-            onClick={confirmBulkDelete}
-            color="error"
-            variant="contained"
-            startIcon={<Delete />}
-          >
-            Delete {bulkDeleteDialog.count} Items
-          </Button>
-        </DialogActions>
-      </Dialog>
+        onConfirm={confirmBulkDelete}
+      />
       
       {/* Download Progress Dialog */}
       <DownloadProgressDialog

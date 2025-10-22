@@ -223,7 +223,7 @@ const LandingPage = () => {
               <Box sx={{ textAlign: 'center' }}>
                 <Box
                   component="img"
-                  src="/icon.png"
+                  src="/icon.svg"
                   alt="DataHibernate Logo"
                   sx={{
                     width: { xs: 200, md: 300 },
@@ -408,7 +408,7 @@ const LandingPage = () => {
           <Grid item xs={12} md={6}>
             <Box
               component="img"
-              src="/icon.png"
+              src="/icon.svg"
               alt="DataHibernate"
               sx={{
                 width: '100%',
@@ -541,7 +541,7 @@ const LandingPage = () => {
               <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
                 <Box
                   component="img"
-                  src="/icon.png"
+                  src="/icon.svg"
                   alt="DataHibernate"
                   sx={{ width: 48, height: 48, mr: 2 }}
                 />

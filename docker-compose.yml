@@ -16,6 +16,13 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
   backend:
     build:
       context: ./backend
@@ -24,6 +31,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_started
     environment:
       - SECRET_KEY=your-secret-key-change-this-in-production
       - DEBUG=True
@@ -32,11 +41,54 @@ services:
       - DB_PASSWORD=postgres
       - DB_HOST=postgres
       - DB_PORT=5432
+      - REDIS_URL=redis://redis:6379/0
     volumes:
       - ./backend:/app
     command: >
       sh -c "python manage.py migrate &&
              python manage.py runserver 0.0.0.0:8000"
+
+  celery-worker:
+    build:
+      context: ./backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      - SECRET_KEY=your-secret-key-change-this-in-production
+      - DEBUG=True
+      - DB_NAME=glacierarchival
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./backend:/app
+    command: celery -A deeparchival worker --loglevel=info
+
+  celery-beat:
+    build:
+      context: ./backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      - SECRET_KEY=your-secret-key-change-this-in-production
+      - DEBUG=True
+      - DB_NAME=glacierarchival
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./backend:/app
+    command: celery -A deeparchival beat --loglevel=info
 
   frontend:
     build:
@@ -49,3 +101,4 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:

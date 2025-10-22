@@ -42,8 +42,6 @@ export const useFileActions = (onRefresh, forceRefresh = false) => {
       // Decrypt file if it's encrypted and encryption is enabled
       if (is_encrypted && encryption_metadata && encryptionService.isEnabled()) {
         try {
-          console.log(`Decrypting file: ${filename}`);
-          
           // Create a File object from the blob
           const encryptedFile = new File([fileBlob], filename, { type: fileBlob.type });
           
@@ -52,14 +50,13 @@ export const useFileActions = (onRefresh, forceRefresh = false) => {
             encryptedFile,
             encryption_metadata,
             (progress, status) => {
-              console.log(`Decrypting ${filename}: ${progress}% - ${status}`);
+              // Progress callback
             }
           );
           
           finalBlob = decryptedFile;
           finalFilename = decryptedFile.name;
           
-          console.log(`File decrypted successfully: ${filename}`);
         } catch (decryptionError) {
           console.error(`Decryption failed for ${filename}:`, decryptionError);
           throw new Error(`Decryption failed: ${decryptionError.message}`);

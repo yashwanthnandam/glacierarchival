@@ -74,7 +74,6 @@ self.onmessage = function(e) {
       try {
         // Check if we have a valid token
         if (!accessToken) {
-          console.error('[Worker] No access token available for upload');
           return fileBatch.map(fileData => ({
             success: false,
             file: fileData.name,
@@ -153,7 +152,11 @@ self.onmessage = function(e) {
           }));
         }
         
-        const { results: presignedResults } = await presignedResponse.json();
+        const { presigned_urls: presignedResults } = await presignedResponse.json();
+        
+        if (presignedResults && presignedResults.length > 0) {
+          // Process files
+        }
         
         /**
          * Upload a single file to S3
@@ -169,26 +172,15 @@ self.onmessage = function(e) {
           }
           
           try {
-            // Send individual file progress update
-            self.postMessage({
-              type: 'progress',
-              data: {
-                placeholderId: `batch_${batchIndex}_${index}`,
-                progress: 50,
-                status: 'uploading',
-                fileIndex: index
-              }
-            });
-            
             // Upload to S3 using presigned URL
             const formData = new FormData();
-            Object.keys(presignedData.presignedUrl.fields).forEach(key => {
-              formData.append(key, presignedData.presignedUrl.fields[key]);
+            Object.keys(presignedData.fields).forEach(key => {
+              formData.append(key, presignedData.fields[key]);
             });
             formData.append('file', fileData.file);
             
             const uploadStartTime = performance.now();
-            const uploadResponse = await fetch(presignedData.presignedUrl.url, {
+            const uploadResponse = await fetch(presignedData.url, {
               method: 'POST',
               body: formData
             });
@@ -239,6 +231,8 @@ self.onmessage = function(e) {
         
         // Process files with ADAPTIVE controlled concurrency
         const uploadStartTime = performance.now();
+        let lastProgressUpdate = 0;
+        const PROGRESS_UPDATE_INTERVAL = 200; // Update progress every 200ms max
         
         for (let i = 0; i < fileBatch.length; i += CONCURRENT_UPLOADS) {
           if (cancelled) break;
@@ -255,6 +249,24 @@ self.onmessage = function(e) {
           );
           
           results.push(...chunkResults);
+          
+          // Throttled progress update - only send every 200ms
+          const now = performance.now();
+          if (now - lastProgressUpdate >= PROGRESS_UPDATE_INTERVAL) {
+            lastProgressUpdate = now;
+            // Send progress update for this batch
+            self.postMessage({
+              type: 'progress',
+              data: {
+                completed: results.length,
+                total: fileBatch.length,
+                results: results,
+                placeholderId: null,
+                progress: (results.length / fileBatch.length) * 100,
+                status: 'uploading'
+              }
+            });
+          }
           
           // Brief pause to avoid overwhelming the browser
           if (i + CONCURRENT_UPLOADS < fileBatch.length && !cancelled) {
@@ -305,7 +317,7 @@ self.onmessage = function(e) {
             return;
           }
           
-          // Send progress update
+          // Send progress update (not complete)
           self.postMessage({
             type: 'progress',
             data: {
@@ -326,11 +338,14 @@ self.onmessage = function(e) {
         const successCount = allResults.filter(r => r.success).length;
         const failCount = allResults.filter(r => !r.success).length;
         
-        // Send final results
+        // Send final results as progress (not complete) since this is just one batch
         self.postMessage({
-          type: 'complete',
+          type: 'progress',
           data: {
+            completed: allResults.length,
+            total: files.length,
             results: allResults,
+            progress: 100, // Add progress field for main thread detection
             stats: {
               totalFiles: files.length,
               successCount,
@@ -342,24 +357,8 @@ self.onmessage = function(e) {
           }
         });
 
-        // Decrement files-in-flight counter on backend
-        try {
-          const response = await fetch(`${apiBaseUrl}/media-files/complete_upload_batch/`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${accessToken}`
-            },
-            credentials: 'include',
-            body: JSON.stringify({ completed_files: successCount })
-          });
-          
-          if (!response.ok) {
-            // Still continue - don't fail the upload
-          }
-        } catch (e) {
-          // Still continue - don't fail the upload
-        }
+        // Note: complete_upload_batch is now handled by the main thread
+        // to avoid Web Worker network issues
       } catch (error) {
         self.postMessage({
           type: 'error',

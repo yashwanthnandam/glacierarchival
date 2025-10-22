@@ -604,18 +604,35 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
       // Optimized upload logic - use Web Workers for all uploads
       setUploadStatus('Starting uploads...');
       
-      // Process files directly from original structure (no large array creation)
-      setUploadStatus('Starting streaming upload...');
-      await uploadWithWebWorkersStreamingFromStructure(files, sessionId, totalFiles, controller);
+        // Process files directly from original structure (no large array creation)
+        setUploadStatus('Starting streaming upload...');
+        const allUploadResults = await uploadWithWebWorkersStreamingFromStructure(files, sessionId, totalFiles, controller);
 
-      // Check if upload was cancelled
-      if (controller.signal.aborted) {
-        return;
-      }
+        // Check if upload was cancelled
+        if (controller.signal.aborted) {
+          return;
+        }
 
-      // Check if there were any failures
-      const failedUploads = uploadResults.filter(r => !r.success);
-      const successfulUploads = uploadResults.filter(r => r.success);
+        // Update upload results state for UI display
+        setUploadResults(allUploadResults);
+
+        // Force final session counters to match actual results to avoid 99% stalls
+        const successes = allUploadResults.filter(r => r.success).length;
+        const fails = allUploadResults.length - successes;
+        const missing = Math.max(0, totalFiles - (successes + fails));
+
+        // Reset cumulative counters to the exact final numbers
+        uploadManager._cumulativeCompleted = successes;
+        uploadManager._cumulativeFailed = fails + missing; // fill any gap
+        uploadManager._cumulativeCancelled = uploadManager._cumulativeCancelled || 0;
+        // Ensure uploadTotal remains the stable session total
+        uploadManager._currentSessionTotal = totalFiles;
+        // Emit once so the UI reflects the exact final numbers
+        uploadManager._emitThrottled();
+
+        // Check if there were any failures
+        const failedUploads = allUploadResults.filter(r => !r.success);
+        const successfulUploads = allUploadResults.filter(r => r.success);
       
       // Calculate total size of uploaded files
       const totalSizeBytes = successfulUploads.reduce((sum, result) => sum + (result.fileSize || 0), 0);
@@ -634,6 +651,32 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
           total_size_mb: Math.round(totalSizeBytes / (1024 * 1024))
         }
       );
+      
+      // CRITICAL FIX: Wait for complete_upload_batch calls to finish before calling onUploadComplete
+      if (successfulUploads.length > 0) {
+        try {
+          const apiBaseUrl = API_CONFIG.baseURL.replace('/api/', '/api');
+          const accessToken = secureTokenStorage.getAccessToken();
+          const response = await fetch(`${apiBaseUrl}/media-files/complete_upload_batch/`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${accessToken}`
+            },
+            credentials: 'include',
+            body: JSON.stringify({ completed_files: successfulUploads.length })
+          });
+          
+          if (response.ok) {
+            const responseData = await response.json();
+            // Database is now updated - safe to call onUploadComplete
+          } else {
+            console.error(`[DirectoryUploader] Final complete_upload_batch failed with status:`, response.status);
+          }
+        } catch (error) {
+          console.error(`[DirectoryUploader] Final complete_upload_batch error:`, error);
+        }
+      }
       
       if (failedUploads.length > 0) {
         setUploadStatus(`Upload completed with ${failedUploads.length} failures`);
@@ -659,6 +702,12 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
         if (onUploadComplete) {
           onUploadComplete();
         }
+        
+        // Reset upload state even with failures
+        setIsUploading(false);
+        setIsCancelling(false);
+        setAbortController(null);
+        uploadInProgressRef.current = false;
       } else {
         setUploadStatus(`Upload completed! ${successfulUploads.length} files uploaded successfully`);
         // Don't show results dialog for successful uploads
@@ -667,10 +716,19 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
         if (onUploadComplete) {
           onUploadComplete();
         }
+        
+        // Reset upload state immediately after successful completion
+        setIsUploading(false);
+        setIsCancelling(false);
+        setAbortController(null);
+        uploadInProgressRef.current = false;
       }
       
       // Clean up completed items after upload is finished
       uploadManager.cleanupCompletedItems();
+      
+      // End upload session immediately since database is already updated
+      uploadManager.endUploadSession();
       
       // Clear file references to free memory - delay to ensure UI updates first
       setTimeout(() => {
@@ -697,10 +755,11 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
 
   // Streaming upload directly from file structure (zero memory overhead)
   const uploadWithWebWorkersStreamingFromStructure = async (filesStructure, sessionId, totalFiles, controller) => {
-    const batchSize = UPLOAD_CONFIG.webWorkerBatchSize; // Use optimized Web Worker batch size
-    let processedFiles = 0;
-    
-    // Process each directory's files in batches
+      const batchSize = UPLOAD_CONFIG.webWorkerBatchSize; // Use optimized Web Worker batch size
+      let processedFiles = 0;
+      let allBatchResults = []; // Collect all results to ensure we have complete data
+      
+      // Process each directory's files in batches
     for (const dir of filesStructure) {
       const dirFiles = dir.files;
       const totalBatches = Math.ceil(dirFiles.length / batchSize);
@@ -733,8 +792,9 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
           setUploadStatus(`Uploading ${processedFiles}/${totalFiles} files (${Math.round(processedFiles/totalFiles*100)}%)`);
         }
         
-        // Process this batch
-        await uploadBatchWithWebWorker(batchFilesForUpload, sessionId, controller, batchPlaceholderIds);
+          // Process this batch and collect results
+          const batchResults = await uploadBatchWithWebWorker(batchFilesForUpload, sessionId, controller, batchPlaceholderIds);
+          allBatchResults.push(...batchResults);
         
         // Clean up memory after each batch
         batchFiles.length = 0;
@@ -744,6 +804,9 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
         await new Promise(r => setTimeout(r, 10));
       }
     }
+    
+    // Return all results for final processing
+    return allBatchResults;
   };
 
   // Streaming upload with Web Workers (memory-efficient for large file sets)
@@ -823,7 +886,7 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
       
       let batchResults = [];
       
-      worker.onmessage = (e) => {
+      worker.onmessage = async (e) => {
         const { type, data, ...otherData } = e.data;
         
         if (type === 'progress') {
@@ -844,39 +907,76 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
           if (data && data.results) {
             batchResults = [...batchResults, ...data.results];
           }
-        } else if (type === 'complete') {
-          // Final results
-          if (data && data.results) {
-            batchResults = [...batchResults, ...data.results];
-          }
           
-          // Update placeholders based on actual results - only mark successful uploads as completed
-          batchResults.forEach((result, index) => {
-            if (batchPlaceholderIds[index]) {
-              if (result.success) {
-                uploadManager.updatePlaceholder(batchPlaceholderIds[index], { 
-                  status: 'completed', 
-                  progress: 100 
-                });
-                // Increment the global progress counter for each successful upload
-                uploadManager.incrementCompleted();
-              } else {
-                uploadManager.updatePlaceholder(batchPlaceholderIds[index], { 
-                  status: result.error === 'Upload cancelled' ? 'cancelled' : 'failed', 
-                  progress: 0,
-                  error: result.error 
-                });
+          // Check if this is the final progress message (100% complete)
+          if (data && data.progress >= 100) {
+            // Finalize this batch when progress hits 100%
+            const batchResults = Array.isArray(data?.results) ? data.results : [];
+
+            // Build a stable map from file key -> placeholderId
+            const placeholderByKey = new Map();
+            batchFiles.forEach((f, i) => {
+              const key = `${f.relativePath || ''}/${f.name}`;
+              placeholderByKey.set(key, batchPlaceholderIds[i]);
+            });
+
+            // Update placeholders and ALWAYS increment counters
+            batchResults.forEach((result) => {
+              const key = `${result.path || ''}/${result.file || ''}`;
+              const pid = placeholderByKey.get(key);
+              if (pid) {
+                if (result.success) {
+                  uploadManager.updatePlaceholder(pid, { status: 'completed', progress: 100 });
+                } else {
+                  uploadManager.updatePlaceholder(pid, {
+                    status: result.error === 'Upload cancelled' ? 'cancelled' : 'failed',
+                    progress: 0,
+                    error: result.error
+                  });
+                }
               }
-            }
-          });
-          
-          // Update upload results
-          setUploadResults(prev => [...prev, ...batchResults]);
-          
-          // Clean up worker
+              if (result.success) uploadManager.incrementCompleted();
+              else if (result.error === 'Upload cancelled') uploadManager.incrementCancelled();
+              else uploadManager.incrementFailed();
+            });
+
+            // Guard: if any files in this batch didn't produce a result from the worker,
+            // count them as failed so processed reaches the batch's total.
+            const resultKeySet = new Set(
+              batchResults.map(r => `${r.path || ''}/${r.file || ''}`)
+            );
+
+            batchFiles.forEach((f, i) => {
+              const key = `${f.relativePath || ''}/${f.name}`;
+              if (!resultKeySet.has(key)) {
+                const pid = placeholderByKey.get(key);
+                if (pid) {
+                  uploadManager.updatePlaceholder(pid, {
+                    status: 'failed',
+                    progress: 0,
+                    error: 'No result from worker'
+                  });
+                }
+                uploadManager.incrementFailed();
+              }
+            });
+
+            // Accumulate upload results
+            setUploadResults(prev => [...prev, ...batchResults]);
+
+            // Clean up worker and resolve this batch
+            worker.terminate();
+            setActiveWorkers(prev => prev.filter(w => w !== worker));
+            uploadManager.unregisterWorker(worker);
+            controller.signal.removeEventListener('abort', abortHandler);
+
+            resolve(batchResults);
+          }
+        } else if (type === 'complete') {
+          // Final results - NO-OP to prevent double-counting since progress >= 100 handles everything
+          // Just clean up and resolve
           worker.terminate();
           setActiveWorkers(prev => prev.filter(w => w !== worker));
-      uploadManager.unregisterWorker(worker);
           uploadManager.unregisterWorker(worker);
           controller.signal.removeEventListener('abort', abortHandler);
           
@@ -889,33 +989,51 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
               progress: 0, 
               error: 'Upload cancelled' 
             });
+            // NEW: count cancelled toward processed
+            uploadManager.incrementCancelled();
           });
           
           worker.terminate();
           setActiveWorkers(prev => prev.filter(w => w !== worker));
-      uploadManager.unregisterWorker(worker);
           uploadManager.unregisterWorker(worker);
           controller.signal.removeEventListener('abort', abortHandler);
-          const abortErr = new Error('Upload cancelled');
-          abortErr.name = 'AbortError';
-          reject(abortErr);
+          // Resolve to allow rest of pipeline to continue
+          resolve([]);
         } else if (type === 'error') {
-      worker.terminate();
-      setActiveWorkers(prev => prev.filter(w => w !== worker));
-      uploadManager.unregisterWorker(worker);
+          // Mark all as failed if a batch-level error occurred
+          const errMsg = (data && data.error) || 'Worker error';
+          batchPlaceholderIds.forEach(placeholderId => {
+            uploadManager.updatePlaceholder(placeholderId, { 
+              status: 'failed', 
+              progress: 0, 
+              error: errMsg
+            });
+            uploadManager.incrementFailed();
+          });
+          worker.terminate();
+          setActiveWorkers(prev => prev.filter(w => w !== worker));
           uploadManager.unregisterWorker(worker);
           controller.signal.removeEventListener('abort', abortHandler);
-          reject(new Error(data?.error || 'Unknown error'));
+          // Resolve to let the rest of the upload continue
+          resolve([]);
         }
       };
       
       worker.onerror = (error) => {
         worker.terminate();
         setActiveWorkers(prev => prev.filter(w => w !== worker));
-      uploadManager.unregisterWorker(worker);
         uploadManager.unregisterWorker(worker);
         controller.signal.removeEventListener('abort', abortHandler);
-        reject(error);
+        // Mark this batch as failed and count all toward processed
+        batchPlaceholderIds.forEach(placeholderId => {
+          uploadManager.updatePlaceholder(placeholderId, {
+            status: 'failed',
+            progress: 0,
+            error: error?.message || 'Worker error'
+          });
+          uploadManager.incrementFailed();
+        });
+        resolve([]);
       };
     });
   };
@@ -965,7 +1083,7 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
       
       let allResults = [];
       
-      worker.onmessage = (e) => {
+      worker.onmessage = async (e) => {
         const { type, data } = e.data;
         
         if (type === 'progress') {
@@ -997,26 +1115,46 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
             uploadManager.incrementCompleted();
           }
           
+          // Note: complete_upload_batch is now called synchronously at the end of upload
+          // to ensure database is updated before onUploadComplete is called
+          
           resolve();
         } else if (type === 'cancelled') {
+          // Mark all remaining items as cancelled and count them
+          batchPlaceholderIds.forEach(placeholderId => {
+            uploadManager.updatePlaceholder(placeholderId, {
+              status: 'cancelled',
+              progress: 0,
+              error: 'Upload cancelled'
+            });
+            uploadManager.incrementCancelled();
+          });
+
           controller.signal.removeEventListener('abort', abortHandler);
           worker.terminate();
           setActiveWorkers(prev => prev.filter(w => w !== worker));
           uploadManager.unregisterWorker(worker);
-          const abortErr = new Error('Upload cancelled');
-          abortErr.name = 'AbortError';
-          reject(abortErr);
+          // Resolve to allow rest of pipeline to continue
+          resolve([]);
         }
       };
       
       worker.onerror = (error) => {
         console.error('Web Worker error:', error);
         controller.signal.removeEventListener('abort', abortHandler);
-      worker.terminate();
-      setActiveWorkers(prev => prev.filter(w => w !== worker));
-      uploadManager.unregisterWorker(worker);
+        worker.terminate();
+        setActiveWorkers(prev => prev.filter(w => w !== worker));
         uploadManager.unregisterWorker(worker);
-        reject(error);
+        // Mark this batch as failed and count all toward processed
+        batchPlaceholderIds.forEach(placeholderId => {
+          uploadManager.updatePlaceholder(placeholderId, {
+            status: 'failed',
+            progress: 0,
+            error: error?.message || 'Worker error'
+          });
+          uploadManager.incrementFailed();
+        });
+        resolve([]);
       };
     });
   };
@@ -1406,33 +1544,6 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
             gap: { xs: 1, sm: 2 },
             flexDirection: { xs: 'column', sm: 'row' }
           }}>
-            <Button
-              variant="contained"
-              disabled={validationErrors.length > 0 || files.length === 0 || isUploading}
-              onClick={() => {
-                // Double-check atomic protection at button level
-                if (uploadInProgressRef.current || isUploading) {
-                  console.warn('Upload button clicked but upload already in progress');
-                  return;
-                }
-                
-                // Check validation errors
-                if (validationErrors.length > 0) {
-                  console.warn('Upload button clicked but validation errors exist');
-                  return;
-                }
-                handleUpload();
-              }}
-              startIcon={<CloudUpload />}
-              fullWidth
-              sx={{
-                py: { xs: 1.5, sm: 1 },
-                fontSize: { xs: '0.875rem', sm: '1rem' },
-                fontWeight: 600
-              }}
-            >
-              {isUploading ? 'Uploading...' : 'Upload Files'}
-            </Button>
             {isUploading && (
               <Button
                 variant="outlined"

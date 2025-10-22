@@ -108,6 +108,7 @@ export const mediaAPI = {
   archiveFile: (id) => api.post(`media-files/${id}/archive/`),
   restoreFile: (id, restoreTier = 'Standard') => api.post(`media-files/${id}/restore/`, { restore_tier: restoreTier }),
   downloadFile: (id) => api.get(`media-files/${id}/download/`),
+  bulkDownloadFiles: (fileIds) => api.post('media-files/bulk_download/', { file_ids: fileIds }),
   deleteFile: (id) => api.delete(`media-files/${id}/`),
   bulkArchiveFiles: (fileIds) => api.post('media-files/bulk_archive/', { file_ids: fileIds }),
   bulkRestoreFiles: (fileIds, restoreTier = 'Standard') => api.post('media-files/bulk_restore/', { file_ids: fileIds, restore_tier: restoreTier }),

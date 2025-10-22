@@ -67,7 +67,11 @@ const ModernDashboard = () => {
   // Load user data on component mount
   useEffect(() => {
     loadUserData();
-    checkEncryptionStatus();
+    // Auto-initialize encryption so it's enabled by default
+    (async () => {
+      await encryptionService.ensureInitialized();
+      checkEncryptionStatus();
+    })();
     
     // Check for hash fragment to set initial tab
     const hash = window.location.hash.substring(1); // Remove the # symbol
@@ -96,17 +100,8 @@ const ModernDashboard = () => {
   };
 
   // Handle encryption toggle
-  const handleEncryptionToggle = () => {
-    if (encryptionEnabled) {
-      // Disable encryption
-      encryptionService.disableEncryption();
-      setEncryptionEnabled(false);
-      setEncryptionStatus(null);
-    } else {
-      // Show password dialog to enable encryption
-      setShowPasswordDialog(true);
-    }
-  };
+  // Remove user-facing toggle; always enabled by default
+  const handleEncryptionToggle = () => {};
 
   // Handle password set
   const handlePasswordSet = (password) => {
@@ -170,6 +165,7 @@ const ModernDashboard = () => {
             onFileSelect={handleFileSelect}
             onFolderSelect={handleFolderSelect}
             globalSearchQuery={globalSearch}
+            isActive={currentView === 'hibernate'}
           />
         );
       
@@ -214,7 +210,7 @@ const ModernDashboard = () => {
           }}>
             <Box
               component="img"
-              src="/icon.png"
+              src="/icon.svg"
               alt="DataHibernate Logo"
               sx={{
                 width: { xs: 28, sm: 32 },

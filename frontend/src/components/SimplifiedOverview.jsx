@@ -92,7 +92,11 @@ const SimplifiedOverview = () => {
     if (!usageStats) return 0;
     
     // Handle both API response formats
-    const usedBytes = usageStats.current_storage?.bytes || usageStats.total_storage_bytes || 0;
+    const usedBytes = 
+      usageStats.current_storage?.bytes ??
+      usageStats.storage_used_bytes ??
+      usageStats.total_storage_bytes ??
+      0;
     const usedGB = usedBytes / (1024 ** 3);
     const limitGB = currentPlan && currentPlan.plan ? 
       (currentPlan.plan.storage_tier === '100gb' ? 100 : 
@@ -270,7 +274,11 @@ const SimplifiedOverview = () => {
                   color: 'text.primary', 
                   mb: 2
                 }}>
-                  {formatFileSizeInGB(usageStats?.total_storage_bytes || 0)}
+                  {formatFileSizeInGB(
+                    (usageStats?.current_storage?.bytes ??
+                     usageStats?.storage_used_bytes ??
+                     usageStats?.total_storage_bytes ?? 0)
+                  )}
                 </Typography>
                 
                 <Box sx={{ mb: 3 }}>
@@ -309,7 +317,10 @@ const SimplifiedOverview = () => {
                     color: 'text.secondary',
                     fontWeight: 500
                   }}>
-                    {usageStats.current_storage?.gb?.toFixed(1) || '0.0'} GB stored
+                    {(
+                      usageStats.current_storage?.gb ??
+                      usageStats.storage_used_gb ?? 0
+                    ).toFixed(1)} GB stored
                   </Typography>
                 </Box>
               )}

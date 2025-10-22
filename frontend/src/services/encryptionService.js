@@ -23,6 +23,37 @@ class EncryptionService {
   }
 
   /**
+   * Ensure encryption is initialized. If not, auto-initialize with a persisted
+   * random key so encryption is enabled by default without user action.
+   */
+  async ensureInitialized() {
+    try {
+      if (this.isEnabled()) return true;
+      // Persist a random master key in localStorage (scoped to this browser)
+      let storedKey = null;
+      try {
+        storedKey = window.localStorage.getItem('dh_master_key');
+      } catch (_) {
+        // ignore storage access errors
+      }
+      if (!storedKey) {
+        const bytes = new Uint8Array(32);
+        (window.crypto || window.msCrypto).getRandomValues(bytes);
+        // Convert to hex
+        storedKey = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+        try {
+          window.localStorage.setItem('dh_master_key', storedKey);
+        } catch (_) { /* ignore */ }
+      }
+      await this.initializeEncryption(storedKey);
+      return true;
+    } catch (e) {
+      // If auto-init fails, keep disabled but do not throw
+      return false;
+    }
+  }
+
+  /**
    * Initialize encryption with master password
    * @param {string} password - Master password
    * @returns {Promise<boolean>} - True if initialization successful
