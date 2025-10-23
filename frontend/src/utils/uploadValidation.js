@@ -1,4 +1,4 @@
-import { FILE_UPLOAD, MESSAGES } from '../constants';
+import { FILE_UPLOAD, MESSAGES, FEATURE_FLAGS } from '../constants';
 
 /**
  * Comprehensive upload validation utility
@@ -18,7 +18,38 @@ export const formatBytes = (bytes, decimals = 2) => {
 };
 
 /**
- * Validate individual file
+ * Fast validation for individual file - optimized for large collections
+ */
+export const validateFileFast = (file) => {
+  // Quick size check without expensive formatting
+  if (file.size > FILE_UPLOAD.MAX_FILE_SIZE) {
+    return {
+      isValid: false,
+      errors: [{
+        type: 'FILE_SIZE_EXCEEDED',
+        message: MESSAGES.FILE_SIZE_EXCEEDED,
+        details: `File "${file.name}" exceeds 5GB limit`
+      }]
+    };
+  }
+
+  // Quick filename length check
+  if (file.name.length > 255) {
+    return {
+      isValid: false,
+      errors: [{
+        type: 'FILENAME_TOO_LONG',
+        message: 'Filename too long',
+        details: `File "${file.name}" exceeds 255 character limit`
+      }]
+    };
+  }
+
+  return { isValid: true, errors: [] };
+};
+
+/**
+ * Validate individual file (legacy - kept for compatibility)
  */
 export const validateFile = (file) => {
   const errors = [];
@@ -48,59 +79,93 @@ export const validateFile = (file) => {
 };
 
 /**
- * Validate file collection
+ * Validate file collection - optimized for large file counts
  */
 export const validateFileCollection = (files) => {
   const errors = [];
   const warnings = [];
   let totalSize = 0;
   let validFiles = 0;
+  let invalidFiles = 0;
 
-  // Check file count
+  // Early exit: Check file count first (fastest check)
   if (files.length > FILE_UPLOAD.MAX_FILES) {
     errors.push({
       type: 'TOO_MANY_FILES',
       message: MESSAGES.TOO_MANY_FILES,
       details: `Selected ${files.length} files, maximum allowed is ${FILE_UPLOAD.MAX_FILES}`
     });
+    return {
+      isValid: false,
+      errors,
+      warnings,
+      stats: {
+        totalFiles: files.length,
+        validFiles: 0,
+        invalidFiles: files.length,
+        totalSize: 0,
+        averageFileSize: 0
+      }
+    };
   }
 
-  // Validate each file and calculate totals
-  files.forEach((file, index) => {
-    const fileValidation = validateFile(file);
-    if (!fileValidation.isValid) {
-      errors.push(...fileValidation.errors);
-    } else {
-      validFiles++;
-      totalSize += file.size;
+  // For large collections (>1000 files), use fast validation
+  const useFastValidation = files.length > 1000;
+  const validationFunction = useFastValidation ? validateFileFast : validateFile;
+
+  // Batch processing for very large collections to prevent UI blocking
+  const batchSize = files.length > 10000 ? 5000 : files.length;
+  let processedFiles = 0;
+
+  for (let i = 0; i < files.length; i += batchSize) {
+    const batch = files.slice(i, i + batchSize);
+    
+    // Process batch
+    for (const file of batch) {
+      const fileValidation = validationFunction(file);
+      if (!fileValidation.isValid) {
+        errors.push(...fileValidation.errors);
+        invalidFiles++;
+      } else {
+        validFiles++;
+        totalSize += file.size;
+      }
     }
-  });
-
-  // Check total size
-  if (totalSize > FILE_UPLOAD.MAX_TOTAL_SIZE) {
-    errors.push({
-      type: 'TOTAL_SIZE_EXCEEDED',
-      message: MESSAGES.TOTAL_SIZE_EXCEEDED,
-      details: `Total size is ${formatBytes(totalSize)}, maximum allowed is ${formatBytes(FILE_UPLOAD.MAX_TOTAL_SIZE)}`
-    });
+    
+    processedFiles += batch.length;
+    
+    // Yield to UI thread for large collections
+    if (files.length > 5000 && processedFiles % 5000 === 0) {
+      // This will be handled by the calling code with setTimeout
+    }
   }
 
-  // Check session size
-  if (totalSize > FILE_UPLOAD.MAX_SESSION_SIZE) {
-    errors.push({
-      type: 'SESSION_SIZE_EXCEEDED',
-      message: MESSAGES.SESSION_SIZE_EXCEEDED,
-      details: `Session size is ${formatBytes(totalSize)}, maximum allowed is ${formatBytes(FILE_UPLOAD.MAX_SESSION_SIZE)}`
-    });
-  }
+  // Check total size limits (only if we have valid files)
+  if (validFiles > 0) {
+    if (totalSize > FILE_UPLOAD.MAX_TOTAL_SIZE) {
+      errors.push({
+        type: 'TOTAL_SIZE_EXCEEDED',
+        message: MESSAGES.TOTAL_SIZE_EXCEEDED,
+        details: `Total size is ${formatBytes(totalSize)}, maximum allowed is ${formatBytes(FILE_UPLOAD.MAX_TOTAL_SIZE)}`
+      });
+    }
 
-  // Check memory limit
-  if (totalSize > FILE_UPLOAD.MEMORY_LIMIT) {
-    warnings.push({
-      type: 'MEMORY_LIMIT_WARNING',
-      message: 'Large upload detected',
-      details: `Uploading ${formatBytes(totalSize)}. This may take a while.`
-    });
+    if (totalSize > FILE_UPLOAD.MAX_SESSION_SIZE) {
+      errors.push({
+        type: 'SESSION_SIZE_EXCEEDED',
+        message: MESSAGES.SESSION_SIZE_EXCEEDED,
+        details: `Session size is ${formatBytes(totalSize)}, maximum allowed is ${formatBytes(FILE_UPLOAD.MAX_SESSION_SIZE)}`
+      });
+    }
+
+    // Memory warning for large uploads
+    if (totalSize > FILE_UPLOAD.MEMORY_LIMIT) {
+      warnings.push({
+        type: 'MEMORY_LIMIT_WARNING',
+        message: 'Large upload detected',
+        details: `Uploading ${formatBytes(totalSize)}. This may take a while.`
+      });
+    }
   }
 
   return {
@@ -110,7 +175,7 @@ export const validateFileCollection = (files) => {
     stats: {
       totalFiles: files.length,
       validFiles,
-      invalidFiles: files.length - validFiles,
+      invalidFiles,
       totalSize,
       averageFileSize: validFiles > 0 ? totalSize / validFiles : 0
     }
@@ -267,9 +332,98 @@ export const checkConcurrentUploads = (activeUploads, maxConcurrent = 8) => {
   };
 };
 
+/**
+ * Minimal validation - only checks what's actually needed
+ * Backend handles most validation, frontend only prevents browser issues
+ */
+export const validateFileCollectionMinimal = async (files, onProgress) => {
+  const errors = [];
+  const warnings = [];
+  const totalFiles = files.length;
+
+  // 1. CRITICAL: Prevent browser freeze (backend allows 1000, but we limit to 100k for browser)
+  if (totalFiles > FILE_UPLOAD.MAX_FILES) {
+    errors.push({
+      type: 'TOO_MANY_FILES',
+      message: 'Too many files selected',
+      details: `Selected ${totalFiles} files, maximum allowed is ${FILE_UPLOAD.MAX_FILES} to prevent browser slowdown`
+    });
+    return {
+      isValid: false,
+      errors,
+      warnings,
+      stats: { totalFiles, validFiles: 0, invalidFiles: totalFiles, totalSize: 0, averageFileSize: 0 }
+    };
+  }
+
+  // 2. CRITICAL: Skip size summation if flag disabled or selection very large
+  if (!FEATURE_FLAGS.ENABLE_CLIENT_STORAGE_PRECHECK || totalFiles > 10000) {
+    return {
+      isValid: true,
+      errors,
+      warnings,
+      stats: {
+        totalFiles,
+        validFiles: totalFiles,
+        invalidFiles: 0,
+        totalSize: 0,
+        averageFileSize: 0,
+      }
+    };
+  }
+
+  let totalSize = 0;
+  const batchSize = totalFiles > 10000 ? 5000 : totalFiles;
+  let processedFiles = 0;
+
+  for (let i = 0; i < totalFiles; i += batchSize) {
+    const batch = files.slice(i, i + batchSize);
+    
+    for (const file of batch) {
+      totalSize += file.size;
+    }
+    
+    processedFiles += batch.length;
+    
+    // Update progress for large collections
+    if (onProgress && totalFiles > 1000) {
+      onProgress(processedFiles, totalFiles);
+    }
+    
+    // Yield to UI thread for large collections
+    if (totalFiles > 5000) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+  }
+
+  // 3. CRITICAL: Check storage limit (prevents failed uploads)
+  if (totalSize > FILE_UPLOAD.MAX_TOTAL_SIZE) {
+    errors.push({
+      type: 'TOTAL_SIZE_EXCEEDED',
+      message: 'Upload too large',
+      details: `Total size ${formatBytes(totalSize)} exceeds ${formatBytes(FILE_UPLOAD.MAX_TOTAL_SIZE)} limit`
+    });
+  }
+
+  return {
+    isValid: errors.length === 0,
+    errors,
+    warnings,
+    stats: {
+      totalFiles,
+      validFiles: totalFiles, // Assume all valid (backend will reject invalid ones)
+      invalidFiles: 0,
+      totalSize,
+      averageFileSize: totalFiles > 0 ? totalSize / totalFiles : 0
+    }
+  };
+};
+
 export default {
   validateFile,
+  validateFileFast,
   validateFileCollection,
+  validateFileCollectionMinimal,
   checkStorageLimit,
   estimateUploadTime,
   getUploadStrategy,

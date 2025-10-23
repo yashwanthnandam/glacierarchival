@@ -268,19 +268,19 @@ class RateLimitMiddleware(MiddlewareMixin):
         # Different limits for different types of operations
         if request.path.startswith('/api/uppy/'):
             # Upload operations - stricter limits
-            limit = 400  # Increased to 400 requests per minute
+            limit = 4000  # Increased to 400 requests per minute
             window = 60  # 1 minute window
         elif request.path.startswith('/api/media-files/'):
             # File operations - moderate limit
-            limit = 20  # Reduced from 30
+            limit = 100000  
             window = 60  # 1 minute window
         elif request.path.startswith('/api/auth/'):
             # Authentication - very strict limits
-            limit = 5   # Reduced from 20
+            limit = 100   # Reduced from 20
             window = 300  # 5 minute window
         else:
             # Other API calls - standard limit
-            limit = 50  # Reduced from 100
+            limit = 100  # Reduced from 100
             window = 60  # 1 minute window
         
         # Check current request count

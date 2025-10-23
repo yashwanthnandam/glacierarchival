@@ -16,7 +16,7 @@ export const FILE_STATES = {
     emoji: '☀️',
     description: 'Files you use often — ready instantly',
     tooltip: 'Your file is active and instantly accessible.',
-    color: '#4caf50', // Green
+    color: '#3b82f6', // Changed from green to blue
     technical: 'Active (S3 Standard)'
   },
   

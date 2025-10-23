@@ -25,6 +25,15 @@ export const UPLOAD_CONFIG = {
   maxConcurrentWorkers: 4, // Maximum Web Workers running simultaneously
 };
 
+// Lightweight feature flags for costly client-side operations
+export const FEATURE_FLAGS = {
+  // When true, we compute total size on the client to do a storage precheck
+  // For extremely large selections this can be expensive; disable to defer to backend
+  ENABLE_CLIENT_STORAGE_PRECHECK: false,
+  // When false, we avoid showing per-directory total sizes in the picker UI
+  SHOW_DIRECTORY_TOTAL_SIZES: false,
+};
+
 export const STORAGE_KEYS = {
   TOKEN: 'token',
   REFRESH_TOKEN: 'refreshToken',

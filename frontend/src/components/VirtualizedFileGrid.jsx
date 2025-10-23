@@ -63,15 +63,13 @@ const Cell = memo(({ columnIndex, rowIndex, style, data }) => {
               cursor: 'pointer',
               transition: 'all 0.3s',
               background: 'background.paper',
-              border: `1px solid ${alpha('#60a5fa', 0.2)}`,
+              border: 'none', // Removed rectangular border
               position: 'relative',
               '&:hover': {
                 transform: 'translateY(-4px)',
                 boxShadow: `0 8px 24px ${alpha('#60a5fa', 0.2)}`,
-                borderColor: '#60a5fa',
               },
               ...(isSelected && {
-                borderColor: '#60a5fa',
                 bgcolor: alpha('#60a5fa', 0.1),
               }),
             }}
@@ -169,19 +167,17 @@ const Cell = memo(({ columnIndex, rowIndex, style, data }) => {
             cursor: 'pointer',
             transition: 'all 0.3s',
             background: 'background.paper',
-            border: `1px solid ${alpha(stateConfig.color, 0.2)}`,
+            border: 'none', // Removed rectangular border
             position: 'relative',
             '&:hover': {
               transform: 'translateY(-4px)',
               boxShadow: `0 8px 24px ${alpha(stateConfig.color, 0.2)}`,
-              borderColor: stateConfig.color,
             },
             ...(stateConfig.glow && {
               animation: `${glow} 2s infinite`,
               boxShadow: `0 0 20px ${alpha(stateConfig.color, 0.3)}`,
             }),
             ...(isSelected && {
-              borderColor: stateConfig.color,
               bgcolor: alpha(stateConfig.color, 0.1),
             }),
           }}

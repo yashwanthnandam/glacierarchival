@@ -236,10 +236,10 @@ REST_FRAMEWORK = {
         'rest_framework.throttling.UserRateThrottle'
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': '100/hour',
-        'user': '1000/hour',
-        'upload': '500/hour',  # Upload-specific rate limiting
-        'auth': '20/hour'      # Authentication rate limiting
+        'anon': '10000/hour',      # Anonymous users: 10k/hour (very generous)
+        'user': '1000000/hour',    # Authenticated users: 1M/hour (supports large uploads)
+        'upload': '1000000/hour',  # Upload-specific: 1M/hour (no upload limits)
+        'auth': '100/hour'         # Authentication: 100/hour (still strict for security)
     }
 }
 

@@ -170,6 +170,13 @@ export const mediaAPI = {
     });
   },
 
+  // Finalize a batch: decrement inflight and flip user's 'uploading' -> 'uploaded'
+  completeUploadBatch: (completedFilesCount) => {
+    return api.post('media-files/complete_upload_batch/', {
+      completed_files: completedFilesCount || 0
+    });
+  },
+
   // Get folder structure with cache busting
   getFolderStructure: (cacheBust = false) => {
     const params = cacheBust ? { _t: Date.now() } : {};

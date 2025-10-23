@@ -5,6 +5,7 @@
 
 export const FILE_STATES = {
   UPLOADED: 'uploaded',
+  UPLOADING: 'uploading',
   ARCHIVING: 'archiving', 
   ARCHIVED: 'archived',
   RESTORING: 'restoring',
@@ -13,17 +14,33 @@ export const FILE_STATES = {
 };
 
 export const FILE_STATE_CONFIG = {
+  [FILE_STATES.UPLOADING]: {
+    name: 'Uploading',
+    emoji: '📤',
+    color: '#3B82F6',
+    description: 'File is being uploaded',
+    actionText: 'Cancel',
+    actionIcon: 'Stop',
+    canArchive: false,
+    canRestore: false,
+    canDownload: false,
+    canDelete: false,
+    isProcessing: true,
+    label: 'Uploading'
+  },
   [FILE_STATES.UPLOADED]: {
     name: 'Awake',
     emoji: '☀️',
-    color: '#4CAF50',
+    color: '#3B82F6', // Changed from green to blue for better UI
     description: 'File is active and accessible',
     actionText: 'Archive',
     actionIcon: 'AcUnit',
     canArchive: true,
     canRestore: false,
     canDownload: true,
-    canDelete: true
+    canDelete: true,
+    icon: 'CheckCircle', // Added icon for status chip
+    label: 'Active' // Added label for status chip
   },
   [FILE_STATES.ARCHIVING]: {
     name: 'Falling Asleep',
@@ -36,7 +53,9 @@ export const FILE_STATE_CONFIG = {
     canRestore: false,
     canDownload: false,
     canDelete: false,
-    isProcessing: true
+    isProcessing: true,
+    icon: 'Schedule', // Added icon for status chip
+    label: 'Archiving' // Added label for status chip
   },
   [FILE_STATES.ARCHIVED]: {
     name: 'Hibernating',
@@ -48,7 +67,9 @@ export const FILE_STATE_CONFIG = {
     canArchive: false,
     canRestore: true,
     canDownload: false,
-    canDelete: true
+    canDelete: true,
+    icon: 'AcUnit', // Added icon for status chip
+    label: 'Hibernated' // Added label for status chip
   },
   [FILE_STATES.RESTORING]: {
     name: 'Waking Up',
@@ -61,19 +82,23 @@ export const FILE_STATE_CONFIG = {
     canRestore: false,
     canDownload: false,
     canDelete: false,
-    isProcessing: true
+    isProcessing: true,
+    icon: 'WbSunny', // Added icon for status chip
+    label: 'Restoring' // Added label for status chip
   },
   [FILE_STATES.RESTORED]: {
     name: 'Awake',
     emoji: '☀️',
-    color: '#4CAF50',
+    color: '#3B82F6', // Changed from green to blue for consistency
     description: 'File is restored and accessible',
     actionText: 'Archive',
     actionIcon: 'AcUnit',
     canArchive: true,
     canRestore: false,
     canDownload: true,
-    canDelete: true
+    canDelete: true,
+    icon: 'CheckCircle', // Added icon for status chip
+    label: 'Active' // Added label for status chip
   },
   [FILE_STATES.FAILED]: {
     name: 'Error',
@@ -86,7 +111,9 @@ export const FILE_STATE_CONFIG = {
     canRestore: true,
     canDownload: false,
     canDelete: true,
-    isError: true
+    isError: true,
+    icon: 'Error', // Added icon for status chip
+    label: 'Failed' // Added label for status chip
   }
 };
 

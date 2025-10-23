@@ -216,7 +216,9 @@ self.onmessage = function(e) {
               path: fileData.relativePath,
               size: fileData.size,
               uploadTime: uploadTimeSec,
-              speed: speedMBps
+              speed: speedMBps,
+              mediaFileId: presignedData.media_file_id,
+              s3Key: presignedData.s3_key
             };
             
           } catch (error) {

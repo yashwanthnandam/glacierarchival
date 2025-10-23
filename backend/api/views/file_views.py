@@ -696,13 +696,26 @@ class MediaFileViewSet(viewsets.ModelViewSet):
                 'error': f'Bulk delete failed: {str(e)}'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated])
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated], parser_classes=[JSONParser])
     def mark_upload_complete(self, request):
         """Mark bulk upload as complete and invalidate cache"""
         user_id = request.user.id
         file_ids = request.data.get('file_ids', [])
         
         try:
+            # Optionally finalize specific files: move 'uploading' -> 'uploaded'
+            if isinstance(file_ids, list) and file_ids:
+                try:
+                    updated = MediaFile.objects.filter(
+                        id__in=file_ids,
+                        user_id=user_id,
+                        status='uploading',
+                        is_deleted=False
+                    ).update(status='uploaded')
+                    logger.info(f"[mark_upload_complete] Finalized {updated} files for user {user_id}")
+                except Exception as finalize_err:
+                    logger.warning(f"[mark_upload_complete] finalize by ids failed: {finalize_err}")
+            
             # Validate that all files belong to the user
             if file_ids:
                 user_files = MediaFile.objects.filter(

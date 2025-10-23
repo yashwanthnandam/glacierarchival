@@ -101,7 +101,7 @@ const formatDate = (dateString) => {
   });
 };
 
-// ULTRA SIMPLE Upload Progress Bar - No flickering
+  // ULTRA SIMPLE Upload Progress Bar - No flickering
 const UploadProgressBar = memo(({ uploadManagerState, files }) => {
   // Extract values with defaults - use upload-specific totals for global progress
   const total = uploadManagerState?.uploadTotal || 0;
@@ -111,20 +111,17 @@ const UploadProgressBar = memo(({ uploadManagerState, files }) => {
   const inProgress = uploadManagerState?.uploadInProgress || 0;
   const queued = uploadManagerState?.uploadQueued || 0;
   
-  // Check if there are any files in "uploading" status in the database
-  const dbUploadingFiles = files?.filter(f => f.status === 'uploading') || [];
-  const hasDbUploadingFiles = dbUploadingFiles.length > 0;
-  
   // Calculate percentage based on processed files (completed + failed + cancelled), not just successful
   const processedRaw = completed + failed + cancelled;
   const processed = Math.min(processedRaw, total);
-  // Add 10-file buffer: consider complete when within 10 files of total
-  const effectiveProcessed = Math.min(processed + 10, total);
+  // Remove buffer to avoid confusing counts after cancel; show exact processed
+  const effectiveProcessed = processed;
   const percentage = total > 0 ? Math.floor((effectiveProcessed / total) * 100) : 0;
   
-  // Show progress bar if there's an active upload session OR files actively uploading
+  // Show progress bar only if there's an active upload session
+  // Avoid showing misleading "0/0" bar after cancel when DB still has files in uploading state
   const hasActiveUploadSession = total > 0 && (inProgress > 0 || queued > 0);
-  const showBar = (hasDbUploadingFiles || hasActiveUploadSession) && percentage < 100;
+  const showBar = hasActiveUploadSession && percentage < 100;
   if (!showBar) return null;
   
   const handleCancel = () => {
@@ -380,7 +377,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery,
           count: activeCount,
           total: totalFiles,
           icon: <CheckCircle sx={{ fontSize: 14 }} />,
-          color: '#22c55e',
+          color: '#3b82f6', // Changed from green to blue for consistency
           label: 'Active'
         });
       }

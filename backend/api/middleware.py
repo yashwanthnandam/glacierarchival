@@ -108,7 +108,7 @@ class RateLimitMiddleware(MiddlewareMixin):
             window = 60  # 1 minute window
         elif request.path.startswith('/api/media-files/'):
             # File operations - moderate limit
-            limit = 30  # 30 requests per minute
+            limit = 100000
             window = 60  # 1 minute window
         else:
             # Other API calls - more lenient
@@ -183,52 +183,29 @@ class UploadValidationMiddleware(MiddlewareMixin):
     
     def process_request(self, request):
         """Validate upload requests"""
-        # Only check upload endpoints
-        if not any(request.path.startswith(path) for path in ['/api/uppy/', '/api/media-files/upload/']):
+        if not request.path.startswith('/api/uppy/'):
             return None
-        
-        # Skip for non-authenticated users
-        if not hasattr(request, 'user') or not request.user.is_authenticated:
-            return None
-        
-        # Check if user has exceeded concurrent upload limit
-        user_id = request.user.id
-        concurrent_key = f"concurrent_uploads_{user_id}"
-        current_uploads = cache.get(concurrent_key, 0)
-        
-        max_concurrent = getattr(settings, 'MAX_CONCURRENT_UPLOADS', 100)
-        if current_uploads >= max_concurrent:
-            return JsonResponse({
-                'error': 'Too many concurrent uploads',
-                'message': f'Maximum {max_concurrent} concurrent uploads allowed',
-                'current_uploads': current_uploads,
-                'max_concurrent': max_concurrent
-            }, status=429)
-        
+
+        # For Uppy endpoints, bypass concurrency checks entirely.
+        # The Uppy flow generates presigned URLs and completes uploads via S3,
+        # so counting requests here does not accurately reflect concurrent uploads.
         return None
     
     def process_response(self, request, response):
-        """Track upload completion"""
-        # Only track upload endpoints
-        if not any(request.path.startswith(path) for path in ['/api/uppy/', '/api/media-files/upload/']):
+        """Minimal bookkeeping for Uppy endpoints"""
+        if not request.path.startswith('/api/uppy/'):
             return response
-        
-        # Skip for non-authenticated users
+
         if not hasattr(request, 'user') or not request.user.is_authenticated:
             return response
-        
-        # Track upload completion
-        user_id = request.user.id
-        concurrent_key = f"concurrent_uploads_{user_id}"
-        
-        if request.method == 'POST':
-            # Increment on upload start
-            current_uploads = cache.get(concurrent_key, 0)
-            cache.set(concurrent_key, current_uploads + 1, 3600)  # 1 hour TTL
-        elif request.method in ['PUT', 'PATCH'] and response.status_code in [200, 201]:
-            # Decrement on upload completion
-            current_uploads = cache.get(concurrent_key, 0)
-            if current_uploads > 0:
-                cache.set(concurrent_key, current_uploads - 1, 3600)
-        
+
+        try:
+            # Reset stale counters when a new session is created successfully
+            if request.path.endswith('/create-session/') and response.status_code in [200, 201]:
+                user_id = request.user.id
+                concurrent_key = f"concurrent_uploads_{user_id}"
+                cache.set(concurrent_key, 0, 3600)
+        except Exception:
+            pass
+
         return response

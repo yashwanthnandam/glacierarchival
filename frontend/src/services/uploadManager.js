@@ -24,6 +24,10 @@ class UploadManager {
     this._cumulativeCompleted = 0; // Track cumulative completed files across the session
     this._cumulativeFailed = 0; // Track cumulative failed files across the session
     this._cumulativeCancelled = 0; // Track cumulative cancelled files across the session
+    this._cancelling = false; // When true, ignore late increments from workers
+    this._abortControllers = new Set(); // Track all active AbortControllers globally
+    this._activeXhrs = new Set(); // Track active XHRs for hard abort
+    this._completedFileIds = new Set(); // Track successfully uploaded fileIds for finalization
   }
 
   // Throttle utility to limit function calls
@@ -205,9 +209,8 @@ class UploadManager {
     
     // Mark upload as complete and invalidate cache
     try {
-      const completedFileIds = this.queue
-        .filter(item => item.status === 'completed' && item.fileId)
-        .map(item => item.fileId);
+      // Use tracked set of completed fileIds, since completed items may be removed from queue
+      const completedFileIds = Array.from(this._completedFileIds);
       
       if (completedFileIds.length > 0) {
         const { mediaAPI } = await import('./api');
@@ -217,23 +220,29 @@ class UploadManager {
       console.error('Failed to mark upload as complete:', error);
     }
     
+    // Clear completed ids after attempting to finalize
+    this._completedFileIds.clear();
     this._cleanupCompletedItems(); // Cleanup after upload ends
   }
 
   // Method to increment cumulative completed counter (for Web Worker uploads)
   incrementCompleted() {
+    // Ignore increments when no active upload session or during cancellation
+    if (!this._uploadSessionActive || this._cancelling) return;
     this._cumulativeCompleted += 1;
     this._emitThrottled();
   }
 
   // Method to increment cumulative failed counter (for Web Worker uploads)
   incrementFailed() {
+    if (!this._uploadSessionActive || this._cancelling) return;
     this._cumulativeFailed = (this._cumulativeFailed || 0) + 1;
     this._emitThrottled();
   }
 
   // Method to increment cumulative cancelled counter (for Web Worker uploads)
   incrementCancelled() {
+    if (!this._uploadSessionActive || this._cancelling) return;
     this._cumulativeCancelled = (this._cumulativeCancelled || 0) + 1;
     this._emitThrottled();
   }
@@ -383,6 +392,22 @@ class UploadManager {
   // Cancel all active uploads
   async cancelAllUploads() {
     await this.init();
+    // Enter cancelling mode immediately to block further increments
+    this._cancelling = true;
+    // End session right away so UI stops counting processed files
+    try { await this.endUploadSession(); } catch (e) { /* noop */ }
+    // Abort all registered HTTP requests
+    try {
+      this._abortControllers.forEach(c => { try { c.abort(); } catch {} });
+    } finally {
+      this._abortControllers.clear();
+    }
+    // Abort any active XHRs (hard cancel)
+    try {
+      this._activeXhrs.forEach(xhr => { try { xhr.abort(); } catch {} });
+    } finally {
+      this._activeXhrs.clear();
+    }
     
     // Mark all upload items as cancelled
     this.queue.forEach(item => {
@@ -413,6 +438,19 @@ class UploadManager {
     // Persist changes
     await indexedDBService.clearUploadQueue();
     
+    // Finalize any successfully completed files before cancel
+    try {
+      const completedCount = this._completedFileIds.size;
+      if (completedCount > 0) {
+        const { mediaAPI } = await import('./api');
+        // Best-effort finalize using count-based endpoint (no per-batch complexity)
+        await mediaAPI.completeUploadBatch(completedCount);
+        this._completedFileIds.clear();
+      }
+    } catch (e) {
+      console.warn('Finalization during cancel failed (non-fatal):', e);
+    }
+    
     // Emit state change
     this._emit();
     
@@ -421,6 +459,17 @@ class UploadManager {
     
     // Also dispatch the legacy cancelUpload event for backward compatibility
     window.dispatchEvent(new CustomEvent('cancelUpload'));
+
+    // Exit cancelling mode
+    this._cancelling = false;
+  }
+
+  // Register/Unregister AbortControllers created by UI for uploads
+  registerAbortController(controller) {
+    if (controller) this._abortControllers.add(controller);
+  }
+  unregisterAbortController(controller) {
+    if (controller) this._abortControllers.delete(controller);
   }
 
   async _tick() {
@@ -471,14 +520,20 @@ class UploadManager {
       item.progress = 100;
       item.s3Key = s3Key;
       item.fileId = fileId; // Store fileId for cache invalidation
+      if (fileId) this._completedFileIds.add(fileId);
       await this._persistItem(item);
       this._emitThrottled(); // Use throttled emit to reduce flickering
       
       // Increment cumulative completed counter
       this._cumulativeCompleted += 1;
     } catch (e) {
-      item.status = 'failed';
-      item.error = e?.message || String(e);
+      // If global cancelling is active, reflect cancelled rather than failed
+      if (this._cancelling) {
+        item.status = 'cancelled';
+      } else {
+        item.status = 'failed';
+        item.error = e?.message || String(e);
+      }
       await this._persistItem(item);
       this._emitThrottled(); // Use throttled emit to reduce flickering
     } finally {
@@ -614,16 +669,26 @@ class UploadManager {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', url, true);
+      // Track XHR for global cancellation
+      this._activeXhrs.add(xhr);
       xhr.upload.onprogress = (e) => {
         if (!e.lengthComputable) return;
         const pct = Math.round((e.loaded / e.total) * 100);
         try { onProgress?.(pct); } catch {}
       };
       xhr.onload = () => {
+        this._activeXhrs.delete(xhr);
         if (xhr.status >= 200 && xhr.status < 300) resolve();
         else reject(new Error(`Upload failed with status ${xhr.status}`));
       };
-      xhr.onerror = () => reject(new Error('Network error during upload'));
+      xhr.onerror = () => {
+        this._activeXhrs.delete(xhr);
+        reject(new Error('Network error during upload'));
+      };
+      xhr.onabort = () => {
+        this._activeXhrs.delete(xhr);
+        reject(new Error('Upload aborted'));
+      };
       xhr.send(formData);
     });
   }

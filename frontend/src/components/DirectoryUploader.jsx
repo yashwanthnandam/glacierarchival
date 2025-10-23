@@ -32,20 +32,22 @@ import {
   Stop,
   Security,
   Lock,
-  LockOpen
+  LockOpen,
+  ExpandMore,
+  ChevronRight
 } from '@mui/icons-material';
 import StorageLimitError from './StorageLimitError';
 import { uppyAPI, mediaAPI } from '../services/api';
 import uploadManager from '../services/uploadManager';
 import secureTokenStorage from '../utils/secureTokenStorage';
 import { 
-  validateFileCollection, 
+  validateFileCollectionMinimal,
   checkStorageLimit, 
   checkConcurrentUploads,
   getUploadStrategy,
   formatBytes 
 } from '../utils/uploadValidation';
-import { FILE_UPLOAD, API_CONFIG, UPLOAD_CONFIG } from '../constants';
+import { FILE_UPLOAD, API_CONFIG, UPLOAD_CONFIG, FEATURE_FLAGS } from '../constants';
 import encryptionService from '../services/encryptionService';
 import analyticsService from '../services/analyticsService';
 import { captureException, addBreadcrumb } from '../services/sentryService';
@@ -75,6 +77,7 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
   const directoryInputRef = useRef(null);
   const abortControllerRef = useRef(null);
   const uploadInProgressRef = useRef(false); // Prevent race conditions
+  const cancellationInProgressRef = useRef(false); // Prevent double-cancellation
 
   // Check encryption status on mount
   useEffect(() => {
@@ -117,8 +120,10 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
     setUploadStatus('Validating files...');
 
     try {
-      // Validate file collection
-      const validation = validateFileCollection(selectedFiles);
+      // Use minimal validation - only check what's actually needed
+      const validation = await validateFileCollectionMinimal(selectedFiles, (processed, total) => {
+        setUploadStatus(`Processing files... ${processed}/${total} (${Math.round(processed/total*100)}%)`);
+      });
       
       if (!validation.isValid) {
         setValidationErrors(validation.errors);
@@ -127,12 +132,15 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
         return;
       }
 
-      // Check storage limits
-      const storageResult = await checkStorageLimit(validation.stats.totalSize);
-      if (!storageResult.canUpload) {
-        setValidationErrors([storageResult.error]);
-        setUploadStatus('Storage limit exceeded');
-        return;
+      // Check storage limits (optional precheck)
+      let storageResult = { canUpload: true }; // Default fallback
+      if (FEATURE_FLAGS.ENABLE_CLIENT_STORAGE_PRECHECK) {
+        storageResult = await checkStorageLimit(validation.stats.totalSize);
+        if (!storageResult.canUpload) {
+          setValidationErrors([storageResult.error]);
+          setUploadStatus('Storage limit exceeded');
+          return;
+        }
       }
 
       // Check concurrent uploads
@@ -203,8 +211,10 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
     setUploadStatus('Validating directory...');
 
     try {
-      // Validate file collection first
-      const validation = validateFileCollection(all);
+      // Use minimal validation - only check what's actually needed
+      const validation = await validateFileCollectionMinimal(all, (processed, total) => {
+        setUploadStatus(`Processing directory... ${processed}/${total} (${Math.round(processed/total*100)}%)`);
+      });
       
       if (!validation.isValid) {
         setValidationErrors(validation.errors);
@@ -213,12 +223,15 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
         return;
       }
 
-      // Check storage limits
-      const storageResult = await checkStorageLimit(validation.stats.totalSize);
-      if (!storageResult.canUpload) {
-        setValidationErrors([storageResult.error]);
-        setUploadStatus('Storage limit exceeded');
-        return;
+      // Check storage limits (optional precheck)
+      let storageResult = { canUpload: true }; // Default fallback
+      if (FEATURE_FLAGS.ENABLE_CLIENT_STORAGE_PRECHECK) {
+        storageResult = await checkStorageLimit(validation.stats.totalSize);
+        if (!storageResult.canUpload) {
+          setValidationErrors([storageResult.error]);
+          setUploadStatus('Storage limit exceeded');
+          return;
+        }
       }
 
       // Check concurrent uploads
@@ -314,6 +327,9 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
 
   // Enhanced drag and drop with visual feedback
   const [isDragOver, setIsDragOver] = useState(false);
+  
+  // Track expanded directories for file preview (only for small directories)
+  const [expandedDirs, setExpandedDirs] = useState(new Set());
 
   const handleDragOver = useCallback((e) => {
     e.preventDefault();
@@ -490,71 +506,12 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
   };
 
  
-  // Cancel upload function - Fixed race conditions
-  const handleCancel = useCallback(() => {
-    setIsCancelling(true);
-    setUploadStatus('Cancelling upload...');
-    
-    try {
-      // Abort all active requests atomically
-    if (abortController) {
-      abortController.abort();
-    }
-    
-      // Send cancel message to all Web Workers first, then terminate them
-    activeWorkers.forEach(worker => {
-        try {
-          // Send cancel message to worker
-          worker.postMessage({ type: 'cancel' });
-          // Give worker a moment to process cancellation
-          setTimeout(() => {
-      worker.terminate();
-          }, 100);
-        } catch (error) {
-          console.warn('Error cancelling worker:', error);
-        }
-    });
-    setActiveWorkers([]);
-    
-      // Clear upload state
-      setUploadResults([]);
-      
-      // Clear placeholders from upload manager (async, don't wait)
-      uploadManager.clearAll().catch(error => {
-        console.warn('Error clearing upload manager:', error);
-      });
-      
-      // Clean up any remaining completed items
-      uploadManager.cleanupCompletedItems();
-      
-    } catch (error) {
-      console.error('Error during cancellation:', error);
-    } finally {
-      // End upload session to allow cleanup
-      uploadManager.endUploadSession();
-      
-      // Always reset state, even if errors occur
-    setIsUploading(false);
-    setIsCancelling(false);
-    setUploadStatus('Upload cancelled');
-    setAbortController(null);
-      uploadInProgressRef.current = false; // Reset the atomic flag
-    }
-  }, [abortController, activeWorkers]);
+  // Local cancel simplified to defer to global cancel only
+  const handleCancel = useCallback(async () => {
+    try { await uploadManager.cancelAllUploads(); } catch (_) {}
+  }, []);
 
-  // Listen for external cancel events
-  useEffect(() => {
-    const handleCancelEvent = () => {
-      if (isUploading) {
-        handleCancel();
-      }
-    };
-
-    window.addEventListener('cancelAllUploads', handleCancelEvent);
-    return () => {
-      window.removeEventListener('cancelAllUploads', handleCancelEvent);
-    };
-  }, [isUploading, handleCancel]);
+  // No local cancel event wiring needed
 
   // Upload all files with Web Workers for maximum performance
   const handleUpload = async () => {
@@ -580,6 +537,7 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
     // Create abort controller for cancellation
     const controller = new AbortController();
     setAbortController(controller);
+    uploadManager.registerAbortController(controller);
     setIsUploading(true);
     setIsCancelling(false);
     setUploadProgress(0);
@@ -652,29 +610,11 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
         }
       );
       
-      // CRITICAL FIX: Wait for complete_upload_batch calls to finish before calling onUploadComplete
+      // Final precise finalize (id-based) to cover any remaining successes in this session
       if (successfulUploads.length > 0) {
-        try {
-          const apiBaseUrl = API_CONFIG.baseURL.replace('/api/', '/api');
-          const accessToken = secureTokenStorage.getAccessToken();
-          const response = await fetch(`${apiBaseUrl}/media-files/complete_upload_batch/`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${accessToken}`
-            },
-            credentials: 'include',
-            body: JSON.stringify({ completed_files: successfulUploads.length })
-          });
-          
-          if (response.ok) {
-            const responseData = await response.json();
-            // Database is now updated - safe to call onUploadComplete
-          } else {
-            console.error(`[DirectoryUploader] Final complete_upload_batch failed with status:`, response.status);
-          }
-        } catch (error) {
-          console.error(`[DirectoryUploader] Final complete_upload_batch error:`, error);
+        const successIds = successfulUploads.filter(r => r.mediaFileId).map(r => r.mediaFileId);
+        if (successIds.length > 0) {
+          try { await mediaAPI.markUploadComplete(successIds); } catch (_) {}
         }
       }
       
@@ -748,6 +688,7 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
       
       setIsUploading(false);
       setIsCancelling(false);
+      uploadManager.unregisterAbortController(controller);
       setAbortController(null);
       uploadInProgressRef.current = false; // Reset the atomic flag
     }
@@ -920,6 +861,7 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
               placeholderByKey.set(key, batchPlaceholderIds[i]);
             });
 
+
             // Update placeholders and ALWAYS increment counters
             batchResults.forEach((result) => {
               const key = `${result.path || ''}/${result.file || ''}`;
@@ -963,6 +905,16 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
 
             // Accumulate upload results
             setUploadResults(prev => [...prev, ...batchResults]);
+
+            // Collect successfully uploaded fileIds for precise finalization
+            const successIds = (batchResults || [])
+              .filter(r => r.success && r.mediaFileId)
+              .map(r => r.mediaFileId);
+            if (successIds.length > 0) {
+              try {
+                await mediaAPI.markUploadComplete(successIds);
+              } catch (_e) { /* non-fatal */ }
+            }
 
             // Clean up worker and resolve this batch
             worker.terminate();
@@ -1168,6 +1120,7 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
     setUploadResults([]);
     setShowResults(false);
     setSessionId(null);
+    setExpandedDirs(new Set()); // Clear expanded directories
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -1330,43 +1283,20 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
             )}
           </Box>
 
-          {/* File List */}
+          {/* Minimal summary for very large selections - hide folder list entirely */}
           {files.length > 0 && (
             <Box sx={{ mt: 3 }}>
               <Typography variant="h6" gutterBottom>
-                Selected Files ({files.reduce((sum, dir) => sum + dir.files.length, 0)} files)
+                Selected Files ({files.reduce((sum, dir) => sum + dir.files.length, 0).toLocaleString()} files)
                 {files.some(dir => dir.isDirectory) && ' - Directory Structure Preserved'}
               </Typography>
-              <List sx={{ maxHeight: 300, overflow: 'auto' }}>
-                {files.map((dir, dirIndex) => (
-                  <React.Fragment key={dirIndex}>
-                    <ListItem>
-                      <ListItemIcon>
-                        {dir.isDirectory ? (
-                          <FolderOpen color="primary" />
-                        ) : (
-                          <InsertDriveFile color="secondary" />
-                        )}
-                      </ListItemIcon>
-                      <ListItemText
-                        primary={dir.directory}
-                        secondary={`${dir.files.length} files${dir.isDirectory ? ' (directory)' : ' (individual files)'}`}
-                      />
-                    </ListItem>
-                    {dir.files.map((file, fileIndex) => (
-                      <ListItem key={fileIndex} sx={{ pl: 4 }}>
-                        <ListItemIcon>
-                          <InsertDriveFile color="action" />
-                        </ListItemIcon>
-                        <ListItemText
-                          primary={file.name}
-                          secondary={formatFileSize(file.size)}
-                        />
-                      </ListItem>
-                    ))}
-                  </React.Fragment>
-                ))}
-              </List>
+              <Alert severity="info" sx={{ mb: 2 }}>
+                <Typography variant="caption">
+                  💡 Individual file details are hidden for large uploads to prevent browser slowdown. All files will be uploaded correctly.
+                </Typography>
+              </Alert>
+
+              {/* Minimal summary only - counts shown in Ready to Upload below */}
             </Box>
           )}
 
@@ -1432,34 +1362,6 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
                   </Typography>
                 </Box>
 
-                {/* Simple Stats */}
-                <Box sx={{ display: 'flex', justifyContent: 'space-around', py: 2, bgcolor: 'white', borderRadius: 1 }}>
-                  <Box sx={{ textAlign: 'center' }}>
-                    <Typography variant="h6" sx={{ fontWeight: 600, color: 'primary.main' }}>
-                      {files.reduce((sum, dir) => sum + dir.files.length, 0)}
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      Files
-                    </Typography>
-                  </Box>
-                  <Box sx={{ textAlign: 'center' }}>
-                    <Typography variant="h6" sx={{ fontWeight: 600, color: 'primary.main' }}>
-                      {files.length}
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      Folders
-                    </Typography>
-                  </Box>
-                  <Box sx={{ textAlign: 'center' }}>
-                    <Typography variant="h6" sx={{ fontWeight: 600, color: 'primary.main' }}>
-                      {encryptionEnabled ? '🔒' : '🔓'}
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      {encryptionEnabled ? 'Encrypted' : 'Standard'}
-                    </Typography>
-                  </Box>
-                </Box>
-
                 {/* Upload Button */}
                 <Button
                   variant="contained"
@@ -1476,66 +1378,7 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
           )}
 
           {/* Upload Progress */}
-          {isUploading && (
-            <Box sx={{ 
-              mt: 3, 
-              p: { xs: 2, sm: 3 },
-              bgcolor: 'background.paper',
-              borderRadius: 2,
-              border: '1px solid',
-              borderColor: 'divider',
-              boxShadow: 1
-            }}>
-              <Typography 
-                variant="body2" 
-                gutterBottom
-                sx={{ 
-                  fontWeight: 600,
-                  fontSize: { xs: '0.875rem', sm: '1rem' },
-                  color: 'text.primary'
-                }}
-              >
-                {uploadStatus}
-              </Typography>
-              <LinearProgress 
-                variant="determinate" 
-                value={isNaN(uploadProgress) ? 0 : uploadProgress} 
-                sx={{ 
-                  mb: 2,
-                  height: { xs: 8, sm: 6 },
-                  borderRadius: { xs: 4, sm: 3 },
-                  bgcolor: 'grey.200',
-                  '& .MuiLinearProgress-bar': {
-                    borderRadius: { xs: 4, sm: 3 },
-                    background: 'linear-gradient(90deg, #1976d2 0%, #42a5f5 100%)'
-                  }
-                }}
-              />
-              <Box sx={{ 
-                display: 'flex', 
-                justifyContent: 'space-between',
-                alignItems: 'center'
-              }}>
-                <Typography 
-                  variant="body2" 
-                  color="text.secondary"
-                  sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' } }}
-                >
-                  {isNaN(uploadProgress) ? '0.0' : uploadProgress.toFixed(1)}% complete
-                </Typography>
-                <Typography 
-                  variant="body2" 
-                  color="primary.main"
-                  sx={{ 
-                    fontWeight: 600,
-                    fontSize: { xs: '0.75rem', sm: '0.875rem' }
-                  }}
-                >
-                  {files.reduce((sum, dir) => sum + dir.files.length, 0)} files
-                </Typography>
-              </Box>
-            </Box>
-          )}
+          {/* Removed local progress UI - rely on global progress bar */}
 
           {/* Action Buttons */}
           <Box sx={{ 
@@ -1544,23 +1387,7 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
             gap: { xs: 1, sm: 2 },
             flexDirection: { xs: 'column', sm: 'row' }
           }}>
-            {isUploading && (
-              <Button
-                variant="outlined"
-                color="error"
-                onClick={handleCancel}
-                disabled={isCancelling}
-                startIcon={<Stop />}
-                fullWidth
-                sx={{
-                  py: { xs: 1.5, sm: 1 },
-                  fontSize: { xs: '0.875rem', sm: '1rem' },
-                  fontWeight: 600
-                }}
-              >
-                {isCancelling ? 'Cancelling...' : 'Cancel Upload'}
-              </Button>
-            )}
+            {/* Removed local cancel button - use global cancel only */}
             <Button
               variant="outlined"
               onClick={() => {
