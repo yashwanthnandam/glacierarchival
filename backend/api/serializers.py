@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
-from .models import MediaFile, ArchiveJob, S3Config, HibernationPlan, UserHibernationPlan, Payment
+from .models import MediaFile, ArchiveJob, S3Config, HibernationPlan, UserHibernationPlan, Payment, ArchiveBundle, FileBatchJob
 
 class UserSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
@@ -40,20 +40,64 @@ class S3ConfigSerializer(serializers.ModelSerializer):
         }
 
 
+class FileBatchJobSerializer(serializers.ModelSerializer):
+    """Serializer for unified batch job progress tracking"""
+    username = serializers.CharField(source='user.username', read_only=True)
+    percentage = serializers.ReadOnlyField()
+    is_active = serializers.ReadOnlyField()
+    is_complete = serializers.ReadOnlyField()
+    
+    class Meta:
+        model = FileBatchJob
+        fields = (
+            'id', 'operation', 'status', 'total_files', 'processed_files',
+            'succeeded_files', 'failed_files', 'total_size_bytes', 'processed_size_bytes',
+            'created_at', 'started_at', 'completed_at', 'error_message',
+            'failed_file_ids', 'username', 'percentage', 'is_active', 'is_complete'
+        )
+        read_only_fields = ('created_at', 'started_at', 'completed_at', 'percentage')
+
+
+class ArchiveBundleSerializer(serializers.ModelSerializer):
+    """Serializer for Archive Bundle"""
+    username = serializers.CharField(source='user.username', read_only=True)
+    is_restorable = serializers.ReadOnlyField()
+    is_restored = serializers.ReadOnlyField()
+    
+    class Meta:
+        model = ArchiveBundle
+        fields = (
+            'id', 'bundle_name', 's3_key', 'glacier_archive_id', 'status',
+            'total_files', 'total_size_bytes', 'created_at', 'archived_at',
+            'restored_at', 'restore_tier', 'estimated_completion', 'username',
+            'is_restorable', 'is_restored'
+        )
+        read_only_fields = ('created_at', 'archived_at', 'restored_at', 'status')
+
+
 class MediaFileSerializer(serializers.ModelSerializer):
     username = serializers.CharField(source='user.username', read_only=True)
     file_size_mb = serializers.ReadOnlyField()
     is_archived = serializers.ReadOnlyField()
     is_restored = serializers.ReadOnlyField()
+    bundle_id = serializers.IntegerField(source='archive_bundle.id', read_only=True, allow_null=True)
+    bundle_name = serializers.CharField(source='archive_bundle.bundle_name', read_only=True, allow_null=True)
+    bundle_status = serializers.CharField(source='archive_bundle.status', read_only=True, allow_null=True)
+    can_restore_individually = serializers.SerializerMethodField()
 
     class Meta:
         model = MediaFile
         fields = (
             'id', 'filename', 'original_filename', 'file_size', 'file_size_mb', 
             'file_type', 's3_key', 'status', 'uploaded_at', 'archived_at', 
-            'description', 'username', 'checksum', 'is_archived', 'is_restored', 'relative_path'
+            'description', 'username', 'checksum', 'is_archived', 'is_restored', 'relative_path',
+            'bundle_id', 'bundle_name', 'bundle_status', 'can_restore_individually'
         )
         read_only_fields = ('uploaded_at', 'archived_at', 'status', 's3_key', 'checksum')
+    
+    def get_can_restore_individually(self, obj):
+        """Files in bundles can only be restored as part of the bundle"""
+        return obj.archive_bundle is None
 
 class ArchiveJobSerializer(serializers.ModelSerializer):
     media_file_name = serializers.CharField(source='media_file.original_filename', read_only=True)

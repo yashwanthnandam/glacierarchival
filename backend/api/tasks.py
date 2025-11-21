@@ -34,15 +34,12 @@ def process_bulk_delete(self, batch_job_id, file_ids, user_id):
         
         # Separate files by storage type for bulk operations
         s3_files = []
-        glacier_files = []
         files_to_update = []
         
         for media_file in files:
             files_to_update.append(media_file)
             if media_file.s3_key:
                 s3_files.append(media_file.s3_key)
-            if media_file.glacier_archive_id:
-                glacier_files.append(media_file.glacier_archive_id)
         
         succeeded = []
         failed = []
@@ -69,17 +66,6 @@ def process_bulk_delete(self, batch_job_id, file_ids, user_id):
                         except Exception as s3_error:
                             logger.warning(f"Failed to delete S3 file {media_file.s3_key}: {s3_error}")
                             failed.append({'id': media_file.id, 'error': f"S3 delete failed: {s3_error}"})
-        
-        # Step 2: Delete from Glacier (individual for now - Glacier doesn't have batch delete)
-        if glacier_files:
-            logger.info(f"Deleting {len(glacier_files)} files from Glacier...")
-            for media_file in files_to_update:
-                if media_file.glacier_archive_id:
-                    try:
-                        s3_service.delete_glacier_archive(media_file.glacier_archive_id)
-                    except Exception as e:
-                        logger.warning(f"Failed to delete Glacier archive {media_file.glacier_archive_id}: {e}")
-                        failed.append({'id': media_file.id, 'error': f"Glacier delete failed: {e}"})
         
         # Step 3: Bulk soft delete in database using Django bulk_update
         try:
@@ -153,7 +139,10 @@ def process_bulk_delete(self, batch_job_id, file_ids, user_id):
 
 @shared_task(name='api.process_bulk_archive', bind=True, max_retries=3, time_limit=1800, soft_time_limit=1500)
 def process_bulk_archive(self, batch_job_id, file_ids, user_id):
-    """Process bulk archive using optimized bulk operations."""
+    """
+    Process bulk archive by creating ZIP bundles.
+    This is the new approach: bundle files into ZIPs before archiving to Glacier.
+    """
     from django.contrib.auth.models import User
     
     try:
@@ -162,59 +151,38 @@ def process_bulk_archive(self, batch_job_id, file_ids, user_id):
         batch_job.status = 'in_progress'
         batch_job.save()
         
-        files = MediaFile.objects.filter(id__in=file_ids, user=user, is_deleted=False, status='uploaded')
+        files = list(MediaFile.objects.filter(id__in=file_ids, user=user, is_deleted=False, status='uploaded'))
         media_service = MediaFileService(user)
         
-        total = files.count()
-        logger.info(f"Starting bulk archive for {total} files (job {batch_job_id})")
+        total = len(files)
+        logger.info(f"Starting bulk archive for {total} files as ZIP bundle (job {batch_job_id})")
         
         succeeded = []
         failed = []
-        files_to_archive = []
         
-        # Step 1: Archive files to Glacier (this is still individual as Glacier doesn't support batch)
-        logger.info(f"Archiving {total} files to Glacier...")
-        current_time = timezone.now()
+        if not files:
+            logger.warning(f"No files to archive for job {batch_job_id}")
+            batch_job.status = 'completed'
+            batch_job.progress = 100
+            batch_job.completed_at = timezone.now()
+            batch_job.save()
+            return
         
-        for media_file in files:
-            try:
-                # Archive the file using the service
-                media_service.archive_file(media_file)
-                succeeded.append(media_file.id)
-                files_to_archive.append(media_file)
-                
-            except Exception as e:
-                logger.error(f"Failed to archive file {media_file.id}: {e}")
-                failed.append({'id': media_file.id, 'error': str(e)})
-        
-        # Step 2: Bulk update database records for successful archives
-        if files_to_archive:
-            try:
-                logger.info(f"Bulk updating {len(files_to_archive)} files in database...")
-                
-                # Prepare files for bulk update
-                for media_file in files_to_archive:
-                    media_file.status = 'archived'
-                    media_file.archived_at = current_time
-                
-                # Use Django's bulk_update for maximum performance
-                MediaFile.objects.bulk_update(
-                    files_to_archive, 
-                    ['status', 'archived_at'], 
-                    batch_size=1000
-                )
-                
-            except Exception as e:
-                logger.error(f"Database bulk update failed: {e}")
-                # Fall back to individual updates
-                for media_file in files_to_archive:
-                    try:
-                        media_file.status = 'archived'
-                        media_file.archived_at = current_time
-                        media_file.save()
-                    except Exception as db_error:
-                        logger.error(f"Failed to update file {media_file.id}: {db_error}")
-                        failed.append({'id': media_file.id, 'error': f"Database update failed: {db_error}"})
+        # Bundle files into ZIP and archive
+        try:
+            logger.info(f"Creating ZIP bundle for {total} files...")
+            
+            # Archive all files as a single bundle
+            bundle = media_service.archive_files_as_bundle(files)
+            
+            # All files succeeded
+            succeeded = [f.id for f in files]
+            logger.info(f"Successfully created bundle {bundle.bundle_name} with {total} files")
+            
+        except Exception as e:
+            logger.error(f"Failed to create archive bundle: {e}")
+            # All files failed if bundle creation fails
+            failed = [{'id': f.id, 'error': str(e)} for f in files]
         
         # Store results in cache
         results = {
@@ -227,9 +195,11 @@ def process_bulk_archive(self, batch_job_id, file_ids, user_id):
         cache.set(f"bulk_archive_results_{batch_job_id}", results, 86400)  # 24 hours
         
         # Complete the batch job
-        batch_job.status = 'completed'
+        batch_job.status = 'completed' if len(succeeded) > 0 else 'failed'
         batch_job.progress = 100
         batch_job.completed_at = timezone.now()
+        if len(succeeded) == 0 and failed:
+            batch_job.error_message = f"Bundle creation failed: {failed[0]['error']}"
         batch_job.save()
         
         # Invalidate user cache
@@ -255,8 +225,12 @@ def process_bulk_archive(self, batch_job_id, file_ids, user_id):
 
 @shared_task(name='api.process_bulk_restore', bind=True, max_retries=3, time_limit=1800, soft_time_limit=1500)
 def process_bulk_restore(self, batch_job_id, file_ids, user_id, restore_tier='Standard'):
-    """Process bulk restore in background."""
+    """
+    Process bulk restore at bundle level.
+    Only complete bundles can be restored, not individual files.
+    """
     from django.contrib.auth.models import User
+    from .models import ArchiveBundle
     
     try:
         batch_job = ArchiveJob.objects.get(id=batch_job_id)
@@ -264,7 +238,7 @@ def process_bulk_restore(self, batch_job_id, file_ids, user_id, restore_tier='St
         batch_job.status = 'in_progress'
         batch_job.save()
         
-        files = MediaFile.objects.filter(id__in=file_ids, user=user, is_deleted=False, status='archived')
+        files = MediaFile.objects.filter(id__in=file_ids, user=user, is_deleted=False, status='archived').select_related('archive_bundle')
         media_service = MediaFileService(user)
         
         total = files.count()
@@ -272,57 +246,57 @@ def process_bulk_restore(self, batch_job_id, file_ids, user_id, restore_tier='St
         
         succeeded = []
         failed = []
-        files_to_restore = []
         
-        # Step 1: Initiate restore jobs (this is still individual as Glacier doesn't support batch)
-        logger.info(f"Initiating restore for {total} files from Glacier...")
-        current_time = timezone.now()
+        # Group files by bundle
+        bundles_to_restore = set()
+        files_by_bundle = {}
         
         for media_file in files:
-            try:
-                # Initiate restore using the service
-                media_service.restore_file(media_file, restore_tier)
-                succeeded.append(media_file.id)
-                files_to_restore.append(media_file)
-                
-            except Exception as e:
-                logger.error(f"Failed to initiate restore for file {media_file.id}: {e}")
-                failed.append({'id': media_file.id, 'error': str(e)})
+            if media_file.archive_bundle:
+                bundles_to_restore.add(media_file.archive_bundle.id)
+                if media_file.archive_bundle.id not in files_by_bundle:
+                    files_by_bundle[media_file.archive_bundle.id] = []
+                files_by_bundle[media_file.archive_bundle.id].append(media_file)
+            else:
+                # Legacy file without bundle - restore individually
+                try:
+                    media_service.restore_file(media_file, restore_tier)
+                    succeeded.append(media_file.id)
+                except Exception as e:
+                    logger.error(f"Failed to restore legacy file {media_file.id}: {e}")
+                    failed.append({'id': media_file.id, 'error': str(e)})
         
-        # Step 2: Bulk update database records for successful restore initiations
-        if files_to_restore:
+        # Restore bundles (one restore per bundle, not per file)
+        logger.info(f"Restoring {len(bundles_to_restore)} unique bundles...")
+        current_time = timezone.now()
+        
+        for bundle_id in bundles_to_restore:
             try:
-                logger.info(f"Bulk updating {len(files_to_restore)} files in database...")
+                bundle = ArchiveBundle.objects.get(id=bundle_id)
+                logger.info(f"Initiating restore for bundle {bundle.bundle_name} with {bundle.total_files} files")
                 
-                # Prepare files for bulk update
-                for media_file in files_to_restore:
-                    media_file.status = 'restoring'
-                    media_file.restore_tier = restore_tier
+                # Restore the entire bundle
+                media_service.restore_bundle(bundle, restore_tier)
                 
-                # Use Django's bulk_update for maximum performance
-                MediaFile.objects.bulk_update(
-                    files_to_restore, 
-                    ['status', 'restore_tier'], 
-                    batch_size=1000
-                )
+                # Mark all files in this bundle as succeeded
+                bundle_file_ids = [f.id for f in files_by_bundle[bundle_id]]
+                succeeded.extend(bundle_file_ids)
+                
+                logger.info(f"Successfully initiated restore for bundle {bundle.bundle_name}")
                 
             except Exception as e:
-                logger.error(f"Database bulk update failed: {e}")
-                # Fall back to individual updates
-                for media_file in files_to_restore:
-                    try:
-                        media_file.status = 'restoring'
-                        media_file.restore_tier = restore_tier
-                        media_file.save()
-                    except Exception as db_error:
-                        logger.error(f"Failed to update file {media_file.id}: {db_error}")
-                        failed.append({'id': media_file.id, 'error': f"Database update failed: {db_error}"})
+                logger.error(f"Failed to restore bundle {bundle_id}: {e}")
+                # Mark all files in this bundle as failed
+                bundle_file_ids = [f.id for f in files_by_bundle.get(bundle_id, [])]
+                for fid in bundle_file_ids:
+                    failed.append({'id': fid, 'error': f"Bundle restore failed: {str(e)}"})
         
         # Store results
         results = {
             'succeeded': succeeded,
             'failed': failed,
             'total': total,
+            'bundles_restored': len(bundles_to_restore),
             'restore_tier': restore_tier,
             'initiated_at': current_time.isoformat(),
             'success_rate': round((len(succeeded) / total) * 100, 1) if total > 0 else 0
@@ -342,7 +316,7 @@ def process_bulk_restore(self, batch_job_id, file_ids, user_id, restore_tier='St
         except Exception as e:
             logger.warning(f"Failed to invalidate cache for user {user_id}: {e}")
         
-        logger.info(f"Bulk restore initiated: {len(succeeded)}/{total} succeeded")
+        logger.info(f"Bulk restore initiated: {len(succeeded)}/{total} files in {len(bundles_to_restore)} bundles succeeded")
         
     except Exception as e:
         logger.error(f"Bulk restore task failed: {e}")
@@ -356,45 +330,43 @@ def process_bulk_restore(self, batch_job_id, file_ids, user_id, restore_tier='St
         raise
 
 
-@shared_task(name='api.sync_restore_status')
-def sync_restore_status() -> int:
-    """Advance files from restoring -> restored when ETA has passed.
-
-    Returns the number of files moved to restored.
+@shared_task(name='api.check_bundle_restores')
+def check_bundle_restores():
     """
-    now = timezone.now()
-    # Jobs still in progress and ETA passed
-    jobs = ArchiveJob.objects.filter(
-        job_type='restore', status='in_progress', estimated_completion__isnull=False,
-        estimated_completion__lte=now
-    ).select_related('media_file', 'user')
-
-    updated = 0
-    users_to_invalidate = set()
+    Periodic task to check if bundle restores are complete.
+    Runs every 30 minutes to check Glacier restore status.
+    """
+    from .models import ArchiveBundle
+    from .services import MediaFileService
+    from django.contrib.auth.models import User
     
-    for job in jobs:
-        media_file: MediaFile = job.media_file
-        if media_file and media_file.status == 'restoring':
-            # Mark as restored (simulated). In real impl, verify Glacier retrieval completion
-            media_file.status = 'restored'
-            media_file.save(update_fields=['status'])
-
-            job.status = 'completed'
-            job.progress = 100
-            job.completed_at = now
-            job.save(update_fields=['status', 'progress', 'completed_at'])
-            updated += 1
-            users_to_invalidate.add(job.user_id)
+    # Get all bundles that are currently restoring
+    restoring_bundles = ArchiveBundle.objects.filter(status='restoring').select_related('user')
     
-    # Invalidate cache for all affected users
-    from .utils import invalidate_user_cache
-    for user_id in users_to_invalidate:
+    logger.info(f"Checking restore status for {restoring_bundles.count()} bundles")
+    
+    completed_count = 0
+    for bundle in restoring_bundles:
         try:
-            invalidate_user_cache(user_id, reason="sync_restore_status")
+            service = MediaFileService(bundle.user)
+            updated_bundle = service.check_and_complete_bundle_restore(bundle)
+            
+            if updated_bundle.status == 'restored':
+                completed_count += 1
+                logger.info(f"Bundle {bundle.bundle_name} restore completed")
+                
+                # Invalidate user cache
+                from .utils import invalidate_user_cache
+                try:
+                    invalidate_user_cache(bundle.user.id, reason="bundle_restore_complete")
+                except Exception as e:
+                    logger.warning(f"Failed to invalidate cache for user {bundle.user.id}: {e}")
+                    
         except Exception as e:
-            logger.warning(f"Failed to invalidate cache for user {user_id}: {e}")
-
-    return updated
+            logger.error(f"Error checking restore for bundle {bundle.id}: {e}")
+    
+    logger.info(f"Bundle restore check complete: {completed_count} bundles restored")
+    return completed_count
 
 
 @shared_task(name='api.snapshot_storage_costs')

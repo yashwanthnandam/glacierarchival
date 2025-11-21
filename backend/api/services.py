@@ -5,12 +5,15 @@ import boto3
 import uuid
 import hashlib
 import os
+import io
+import zipfile
+import tempfile
 from datetime import timedelta
 from botocore.exceptions import ClientError
 from django.conf import settings
 from django.utils import timezone
 from django.core.mail import send_mail
-from .models import MediaFile, ArchiveJob, S3Config, EmailVerification, HibernationPlan, UserHibernationPlan
+from .models import MediaFile, ArchiveJob, S3Config, EmailVerification, HibernationPlan, UserHibernationPlan, ArchiveBundle
 from .storage_tracking_service import StorageTrackingService
 from .constants import (
     MAX_FILE_SIZE, MAX_TOTAL_SIZE, MAX_FILES_PER_UPLOAD,
@@ -292,13 +295,6 @@ class S3Service:
             Bucket=self.s3_config.bucket_name,
             Key=s3_key
         )
-    
-    def delete_glacier_archive(self, glacier_archive_id):
-        """Delete Glacier archive (simulated - in real implementation, this would delete from Glacier)"""
-        # In a real implementation, you would use Glacier API to delete the archive
-        # For now, we'll just log it since we're simulating Glacier
-        print(f"Simulated deletion of Glacier archive: {glacier_archive_id}")
-        # Note: In production, you would implement actual Glacier deletion here
     
     def generate_download_url(self, s3_key, expires_in=DOWNLOAD_URL_EXPIRY_SECONDS):
         """Generate presigned download URL"""
@@ -682,16 +678,363 @@ class MediaFileService(BaseService):
             job.save()
             raise e
     
+    def archive_files_as_bundle(self, media_files):
+        """
+        Archive multiple files as ZIP bundles with intelligent chunking.
+        Supports large volumes (100k+ files, 50+ GB) by:
+        - Chunking into multiple bundles (max 5GB or 10k files per bundle)
+        - Streaming ZIP creation to avoid memory issues
+        - Using S3 multipart upload for large ZIPs
+        
+        Returns list of created bundles.
+        """
+        if not media_files:
+            raise ValueError("No files provided for bundling")
+        
+        # Validate all files
+        for media_file in media_files:
+            if media_file.status != 'uploaded':
+                raise ValueError(f"File {media_file.id} must be uploaded before archiving")
+        
+        # Get user's hibernation plan
+        user_plan = self.hibernation_service.get_user_plan()
+        if not user_plan:
+            raise ValueError("Active hibernation plan required for archiving")
+        
+        # Calculate total size
+        total_size = sum(f.file_size for f in media_files)
+        
+        # Check storage limits
+        if not self.hibernation_service.check_storage_limit(total_size):
+            raise ValueError(f"Storage limit exceeded. Current usage: {self.hibernation_service.get_storage_usage_percentage():.1f}%")
+        
+        # Chunk files into manageable bundles
+        # Max 2GB or 10,000 files per bundle to avoid memory/performance issues
+        MAX_BUNDLE_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
+        MAX_FILES_PER_BUNDLE = 10000
+        
+        chunks = self._chunk_files_for_bundling(media_files, MAX_BUNDLE_SIZE, MAX_FILES_PER_BUNDLE)
+        
+        print(f"Splitting {len(media_files)} files ({total_size / (1024**3):.2f} GB) into {len(chunks)} bundles")
+        
+        created_bundles = []
+        
+        for chunk_idx, chunk_files in enumerate(chunks):
+            bundle = self._create_single_bundle(chunk_files, chunk_idx, len(chunks), user_plan)
+            created_bundles.append(bundle)
+        
+        return created_bundles if len(created_bundles) > 1 else created_bundles[0]
+    
+    def _chunk_files_for_bundling(self, media_files, max_size, max_files):
+        """
+        Intelligently chunk files into bundles based on size and count limits.
+        """
+        chunks = []
+        current_chunk = []
+        current_chunk_size = 0
+        
+        for media_file in media_files:
+            file_size = media_file.file_size
+            
+            # Check if adding this file would exceed limits
+            if (current_chunk_size + file_size > max_size or 
+                len(current_chunk) >= max_files) and current_chunk:
+                # Start new chunk
+                chunks.append(current_chunk)
+                current_chunk = []
+                current_chunk_size = 0
+            
+            current_chunk.append(media_file)
+            current_chunk_size += file_size
+        
+        # Add remaining files
+        if current_chunk:
+            chunks.append(current_chunk)
+        
+        return chunks
+    
+    def _create_single_bundle(self, media_files, chunk_idx, total_chunks, user_plan):
+        """
+        Create a single bundle from a chunk of files using streaming approach.
+        """
+        chunk_size = sum(f.file_size for f in media_files)
+        
+        # Create bundle name with chunk info if multiple chunks
+        if total_chunks > 1:
+            bundle_name = f"bundle_{uuid.uuid4().hex[:12]}_{timezone.now().strftime('%Y%m%d_%H%M%S')}_part{chunk_idx + 1}of{total_chunks}"
+        else:
+            bundle_name = f"bundle_{uuid.uuid4().hex[:12]}_{timezone.now().strftime('%Y%m%d_%H%M%S')}"
+        
+        bundle_key = f"archives/{self.user.username}/{bundle_name}.zip"
+        
+        bundle = ArchiveBundle.objects.create(
+            user=self.user,
+            bundle_name=bundle_name,
+            s3_key=bundle_key,
+            status='creating',
+            total_files=len(media_files),
+            total_size_bytes=chunk_size
+        )
+        
+        try:
+            # Use appropriate method based on bundle size
+            # For bundles > 100MB, use multipart upload with streaming
+            if chunk_size > 100 * 1024 * 1024:  # 100 MB
+                self._create_bundle_with_multipart(bundle, media_files, bundle_key, user_plan)
+            else:
+                # Small bundles can use in-memory approach
+                self._create_bundle_in_memory(bundle, media_files, bundle_key, user_plan)
+            
+            # Delete original files from S3
+            for media_file in media_files:
+                try:
+                    self.s3_service.delete_file(media_file.s3_key)
+                except Exception as e:
+                    print(f"Warning: Failed to delete original file {media_file.s3_key}: {e}")
+            
+            # Update bundle status
+            bundle.status = 'archived'
+            bundle.archived_at = timezone.now()
+            bundle.save()
+            
+            # Update all media files in bulk
+            for media_file in media_files:
+                media_file.status = 'archived'
+                media_file.archived_at = timezone.now()
+                media_file.archive_bundle = bundle
+                media_file.s3_key = bundle_key
+            
+            MediaFile.objects.bulk_update(
+                media_files,
+                ['status', 'archived_at', 'archive_bundle', 's3_key'],
+                batch_size=1000
+            )
+            
+            print(f"Bundle {bundle_name} created successfully: {len(media_files)} files, {chunk_size / (1024**2):.2f} MB")
+            return bundle
+            
+        except Exception as e:
+            bundle.status = 'failed'
+            bundle.save()
+            print(f"Failed to create bundle {bundle_name}: {str(e)}")
+            raise e
+    
+    def _create_bundle_in_memory(self, bundle, media_files, bundle_key, user_plan):
+        """Create small bundle in memory (< 100MB)"""
+        zip_buffer = io.BytesIO()
+        
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            for media_file in media_files:
+                try:
+                    # Download file from S3
+                    file_obj = self.s3_service.s3_client.get_object(
+                        Bucket=self.s3_service.s3_config.bucket_name,
+                        Key=media_file.s3_key
+                    )
+                    file_content = file_obj['Body'].read()
+                    
+                    # Add to ZIP with relative path
+                    archive_name = media_file.relative_path or media_file.original_filename
+                    zip_file.writestr(archive_name, file_content)
+                    
+                except Exception as e:
+                    raise ValueError(f"Failed to add file {media_file.id} to bundle: {str(e)}")
+        
+        # Upload ZIP to S3
+        zip_buffer.seek(0)
+        self.s3_service.s3_client.put_object(
+            Bucket=self.s3_service.s3_config.bucket_name,
+            Key=bundle_key,
+            Body=zip_buffer.getvalue(),
+            StorageClass=user_plan.plan.aws_storage_class
+        )
+    
+    def _create_bundle_with_multipart(self, bundle, media_files, bundle_key, user_plan):
+        """
+        Create large bundle using S3 multipart upload with streaming.
+        This avoids loading entire ZIP into memory.
+        """
+        import tempfile
+        import os
+        from django.conf import settings
+        
+        # Use project-specific temp directory for better organization
+        project_temp_dir = os.path.join(settings.BASE_DIR, '..', '.temp')
+        try:
+            os.makedirs(project_temp_dir, exist_ok=True)
+            # Create temp file in project temp directory
+            import time
+            temp_path = os.path.join(project_temp_dir, f'bundle_{bundle.id}_{int(time.time())}.zip')
+        except Exception:
+            # Fallback to system temp if project temp dir creation fails
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as temp_file:
+                temp_path = temp_file.name
+            
+            try:
+                # Create ZIP file on disk
+                with zipfile.ZipFile(temp_path, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                    for media_file in media_files:
+                        try:
+                            # Download file from S3
+                            file_obj = self.s3_service.s3_client.get_object(
+                                Bucket=self.s3_service.s3_config.bucket_name,
+                                Key=media_file.s3_key
+                            )
+                            file_content = file_obj['Body'].read()
+                            
+                            # Add to ZIP
+                            archive_name = media_file.relative_path or media_file.original_filename
+                            zip_file.writestr(archive_name, file_content)
+                            
+                        except Exception as e:
+                            raise ValueError(f"Failed to add file {media_file.id} to bundle: {str(e)}")
+                
+                # Upload using multipart upload
+                self._multipart_upload_file(temp_path, bundle_key, user_plan.plan.aws_storage_class)
+                
+            finally:
+                # Clean up temp file
+                try:
+                    os.remove(temp_path)
+                except:
+                    pass
+    
+    def _multipart_upload_file(self, file_path, s3_key, storage_class):
+        """Upload large file to S3 using multipart upload"""
+        # Use boto3's automatic multipart upload
+        self.s3_service.s3_client.upload_file(
+            file_path,
+            self.s3_service.s3_config.bucket_name,
+            s3_key,
+            ExtraArgs={'StorageClass': storage_class}
+        )
+    
     def restore_file(self, media_file, restore_tier='Standard'):
         """Restore an archived file with hibernation plan limits"""
         if media_file.status != 'archived':
             raise ValueError("File is not archived")
         
-        # Check hibernation plan limits
-        self.s3_service.check_rate_limits('restore', media_file.file_size)
+        # Check if file belongs to a bundle
+        if media_file.archive_bundle:
+            # Restore the entire bundle
+            return self.restore_bundle(media_file.archive_bundle, restore_tier)
         
-        # Delegate to S3Service for actual restore
+        # Legacy: restore individual file (backward compatibility)
+        self.s3_service.check_rate_limits('restore', media_file.file_size)
         return self.s3_service.restore_file(media_file, restore_tier)
+    
+    def restore_bundle(self, bundle, restore_tier='Standard'):
+        """
+        Restore an entire archive bundle from Glacier.
+        Only bundles can be restored, not individual files within them.
+        """
+        if bundle.status not in ['archived', 'restoring']:
+            raise ValueError(f"Bundle cannot be restored. Current status: {bundle.status}")
+        
+        if bundle.status == 'restored':
+            return bundle
+        
+        # Check rate limits
+        self.s3_service.check_rate_limits('restore', bundle.total_size_bytes)
+        
+        try:
+            # Initiate actual Glacier restore request
+            restore_request = {
+                'Days': 7,  # How long the restored object should remain available
+                'GlacierJobParameters': {
+                    'Tier': restore_tier  # Expedited, Standard, or Bulk
+                }
+            }
+            
+            try:
+                # Initiate restore from Glacier
+                self.s3_service.s3_client.restore_object(
+                    Bucket=self.s3_service.s3_config.bucket_name,
+                    Key=bundle.s3_key,
+                    RestoreRequest=restore_request
+                )
+                print(f"Glacier restore initiated for bundle {bundle.bundle_name} with tier {restore_tier}")
+                
+            except ClientError as e:
+                error_code = e.response.get('Error', {}).get('Code', '')
+                # If restore is already in progress, that's okay
+                if error_code == 'RestoreAlreadyInProgress':
+                    print(f"Restore already in progress for bundle {bundle.bundle_name}")
+                # If object is already restored, mark as completed
+                elif error_code == 'ObjectAlreadyRestored':
+                    print(f"Bundle {bundle.bundle_name} is already restored")
+                    bundle.status = 'restored'
+                    bundle.restored_at = timezone.now()
+                    bundle.save()
+                    bundle.files.all().update(status='restored')
+                    return bundle
+                else:
+                    raise
+            
+            # Update bundle status
+            bundle.status = 'restoring'
+            bundle.restore_tier = restore_tier
+            
+            # Calculate estimated completion time
+            tier_hours = {'Expedited': 0.1, 'Standard': 4, 'Bulk': 10}
+            hours = tier_hours.get(restore_tier, 4)
+            bundle.estimated_completion = timezone.now() + timedelta(hours=hours)
+            bundle.save()
+            
+            # Update all files in bundle
+            bundle.files.all().update(
+                status='restoring',
+                restore_tier=restore_tier
+            )
+            
+            print(f"Bundle {bundle.bundle_name} marked as restoring, estimated completion: {bundle.estimated_completion}")
+            return bundle
+            
+        except Exception as e:
+            bundle.status = 'failed'
+            bundle.save()
+            print(f"Failed to restore bundle {bundle.bundle_name}: {str(e)}")
+            raise e
+    
+    def check_and_complete_bundle_restore(self, bundle):
+        """
+        Check if a bundle restore is complete and mark it as restored.
+        This should be called by a periodic task.
+        """
+        if bundle.status != 'restoring':
+            return bundle
+        
+        try:
+            # Check if the restore is complete by checking the object's restore status
+            response = self.s3_service.s3_client.head_object(
+                Bucket=self.s3_service.s3_config.bucket_name,
+                Key=bundle.s3_key
+            )
+            
+            # Check if restore is complete
+            restore_status = response.get('Restore')
+            if restore_status:
+                # Parse restore status: 'ongoing-request="false", expiry-date="..."' means complete
+                if 'ongoing-request="false"' in restore_status:
+                    print(f"Restore complete for bundle {bundle.bundle_name}")
+                    bundle.status = 'restored'
+                    bundle.restored_at = timezone.now()
+                    bundle.save()
+                    
+                    # Update all files in bundle
+                    bundle.files.all().update(status='restored')
+                    return bundle
+                else:
+                    print(f"Restore still in progress for bundle {bundle.bundle_name}")
+            else:
+                # No restore header means object is in standard storage or restore expired
+                print(f"No restore status for bundle {bundle.bundle_name}")
+            
+            return bundle
+            
+        except Exception as e:
+            print(f"Error checking restore status for bundle {bundle.bundle_name}: {str(e)}")
+            return bundle
     
     def _validate_file(self, file):
         """Validate file before upload with comprehensive security checks"""

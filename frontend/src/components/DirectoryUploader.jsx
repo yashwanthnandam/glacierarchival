@@ -37,7 +37,7 @@ import {
   ChevronRight
 } from '@mui/icons-material';
 import StorageLimitError from './StorageLimitError';
-import { uppyAPI, mediaAPI } from '../services/api';
+import { uppyAPI, mediaAPI, batchAPI } from '../services/api';
 import uploadManager from '../services/uploadManager';
 import secureTokenStorage from '../utils/secureTokenStorage';
 import { 
@@ -51,8 +51,9 @@ import { FILE_UPLOAD, API_CONFIG, UPLOAD_CONFIG, FEATURE_FLAGS } from '../consta
 import encryptionService from '../services/encryptionService';
 import analyticsService from '../services/analyticsService';
 import { captureException, addBreadcrumb } from '../services/sentryService';
+import useBatchProgress from '../hooks/useBatchProgress';
 
-const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelativePath = '' }) => {
+const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelativePath = '', onBatchCreated }) => {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadStatus, setUploadStatus] = useState('');
@@ -60,6 +61,8 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
   const [uploadResults, setUploadResults] = useState([]);
   const [showResults, setShowResults] = useState(false);
   const [sessionId, setSessionId] = useState(null);
+  const [uploadBatchId, setUploadBatchId] = useState(null); // Backend batch job ID for progress tracking
+  const uploadBatchIdRef = useRef(null); // Ref to avoid stale state inside async handlers
   
   
   // Validation state
@@ -78,6 +81,13 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
   const abortControllerRef = useRef(null);
   const uploadInProgressRef = useRef(false); // Prevent race conditions
   const cancellationInProgressRef = useRef(false); // Prevent double-cancellation
+
+  // Backend-driven batch progress (FileBatchJob)
+  const {
+    batchData,
+    progress: batchProgress,
+    isActive: batchActive,
+  } = useBatchProgress(uploadBatchId, { enabled: !!uploadBatchId });
 
   // Check encryption status on mount
   useEffect(() => {
@@ -547,6 +557,29 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
     try {
       // Calculate total files FIRST for stable progress tracking
       const totalFiles = files.reduce((sum, dir) => sum + dir.files.length, 0);
+      const totalSizeBytes = files.reduce(
+        (sum, dir) =>
+          sum +
+          dir.files.reduce((inner, f) => inner + (f.size || 0), 0),
+        0
+      );
+
+      // Create backend batch job for unified, DB-backed progress tracking
+      let batchId = null;
+      try {
+        const batchResp = await batchAPI.createBatch('upload', totalFiles, totalSizeBytes);
+        batchId = batchResp?.data?.id || null;
+        uploadBatchIdRef.current = batchId;
+        setUploadBatchId(batchId);
+        // Notify parent (DataHibernateManager) about the active upload batch
+        if (batchId && typeof onBatchCreated === 'function') {
+          onBatchCreated(batchId);
+        }
+      } catch (e) {
+        console.warn('Failed to create upload batch job', e);
+        uploadBatchIdRef.current = null;
+        setUploadBatchId(null);
+      }
       
       // Start upload session with stable total to prevent cleanup during upload
       uploadManager.startUploadSession(totalFiles);
@@ -564,7 +597,13 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
       
         // Process files directly from original structure (no large array creation)
         setUploadStatus('Starting streaming upload...');
-        const allUploadResults = await uploadWithWebWorkersStreamingFromStructure(files, sessionId, totalFiles, controller);
+        const allUploadResults = await uploadWithWebWorkersStreamingFromStructure(
+          files,
+          sessionId,
+          totalFiles,
+          controller,
+          batchId
+        );
 
         // Check if upload was cancelled
         if (controller.signal.aborted) {
@@ -592,11 +631,11 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
         const failedUploads = allUploadResults.filter(r => !r.success);
         const successfulUploads = allUploadResults.filter(r => r.success);
       
-      // Calculate total size of uploaded files
-      const totalSizeBytes = successfulUploads.reduce((sum, result) => sum + (result.fileSize || 0), 0);
+        // Calculate total size of uploaded files (successful only)
+      const uploadedSizeBytes = successfulUploads.reduce((sum, result) => sum + (result.fileSize || 0), 0);
       
       // Track upload completion
-      analyticsService.trackFileUpload(successfulUploads.length, totalSizeBytes, 'web');
+      analyticsService.trackFileUpload(successfulUploads.length, uploadedSizeBytes, 'web');
       
       // Add breadcrumb for upload completion
       addBreadcrumb(
@@ -610,11 +649,15 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
         }
       );
       
-      // Final precise finalize (id-based) to cover any remaining successes in this session
+      // Final precise finalize (id-based) to cover any remaining successes in this session.
+      // Use the ref-based batch ID to avoid stale state.
       if (successfulUploads.length > 0) {
         const successIds = successfulUploads.filter(r => r.mediaFileId).map(r => r.mediaFileId);
         if (successIds.length > 0) {
-          try { await mediaAPI.markUploadComplete(successIds); } catch (_) {}
+          try {
+            const effectiveBatchId = uploadBatchIdRef.current || uploadBatchId || null;
+            await mediaAPI.markUploadComplete(successIds, effectiveBatchId);
+          } catch (_) {}
         }
       }
       
@@ -695,7 +738,7 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
   };
 
   // Streaming upload directly from file structure (zero memory overhead)
-  const uploadWithWebWorkersStreamingFromStructure = async (filesStructure, sessionId, totalFiles, controller) => {
+  const uploadWithWebWorkersStreamingFromStructure = async (filesStructure, sessionId, totalFiles, controller, batchId = null) => {
       const batchSize = UPLOAD_CONFIG.webWorkerBatchSize; // Use optimized Web Worker batch size
       let processedFiles = 0;
       let allBatchResults = []; // Collect all results to ensure we have complete data
@@ -772,7 +815,13 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
       setUploadStatus(`Uploading batch ${batchIndex + 1}/${totalBatches} (${processedFiles}/${totalFiles} files)`);
       
       // Process this batch
-      await uploadBatchWithWebWorker(batchFiles, sessionId, controller, placeholderIds.slice(startIndex, endIndex));
+      await uploadBatchWithWebWorker(
+        batchFiles,
+        sessionId,
+        controller,
+        placeholderIds.slice(startIndex, endIndex),
+        batchId
+      );
       
       // Clean up memory after each batch
       batchFiles.length = 0; // Clear the batch array
@@ -783,7 +832,7 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
   };
 
   // Upload a single batch with Web Worker
-  const uploadBatchWithWebWorker = async (batchFiles, sessionId, controller, batchPlaceholderIds) => {
+  const uploadBatchWithWebWorker = async (batchFiles, sessionId, controller, batchPlaceholderIds, batchId = null) => {
     return new Promise((resolve, reject) => {
       const worker = new Worker('/upload-worker.js');
       const workers = [...activeWorkers, worker];
@@ -807,7 +856,8 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
         sessionId: sessionId,
         batchSize: UPLOAD_CONFIG.webWorkerBatchSize,
         accessToken: secureTokenStorage.getAccessToken(),
-        apiBaseUrl: API_CONFIG.baseURL.replace('/api/', '/api')
+        apiBaseUrl: API_CONFIG.baseURL.replace('/api/', '/api'),
+        batchId: batchId || uploadBatchId || null,
       });
       
       // Handle cancellation by sending cancel message then terminating the worker
@@ -905,14 +955,15 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
 
             // Accumulate upload results
             setUploadResults(prev => [...prev, ...batchResults]);
-
+            
             // Collect successfully uploaded fileIds for precise finalization
             const successIds = (batchResults || [])
               .filter(r => r.success && r.mediaFileId)
               .map(r => r.mediaFileId);
             if (successIds.length > 0) {
               try {
-                await mediaAPI.markUploadComplete(successIds);
+                const effectiveBatchId = batchId || uploadBatchIdRef.current || uploadBatchId || null;
+                await mediaAPI.markUploadComplete(successIds, effectiveBatchId);
               } catch (_e) { /* non-fatal */ }
             }
 
@@ -1377,8 +1428,19 @@ const DirectoryUploader = ({ onUploadComplete, onUploadProgress, defaultRelative
             </Paper>
           )}
 
-          {/* Upload Progress */}
-          {/* Removed local progress UI - rely on global progress bar */}
+          {/* Upload Progress - now driven by backend FileBatchJob */}
+          {uploadBatchId && (
+            <Box sx={{ mt: 2 }}>
+              <Typography variant="body2" sx={{ fontWeight: 500, mb: 0.5 }}>
+                📤 Uploading files ({batchProgress || 0}%)
+              </Typography>
+              <LinearProgress
+                variant="determinate"
+                value={batchProgress || 0}
+                sx={{ mt: 0.5, height: 8, borderRadius: 4 }}
+              />
+            </Box>
+          )}
 
           {/* Action Buttons */}
           <Box sx={{ 

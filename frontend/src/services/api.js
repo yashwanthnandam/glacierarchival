@@ -109,10 +109,22 @@ export const mediaAPI = {
   restoreFile: (id, restoreTier = 'Standard') => api.post(`media-files/${id}/restore/`, { restore_tier: restoreTier }),
   downloadFile: (id) => api.get(`media-files/${id}/download/`),
   bulkDownloadFiles: (fileIds) => api.post('media-files/bulk_download/', { file_ids: fileIds }),
+  bulkDownloadPrepare: (fileIds, encryptionPassword = null) => api.post('media-files/bulk_download_prepare/', { 
+    file_ids: fileIds,
+    encryption_password: encryptionPassword 
+  }),
+  bulkDownloadStatus: (jobId) => api.get(`media-files/bulk_download_status/?job_id=${jobId}`),
   deleteFile: (id) => api.delete(`media-files/${id}/`),
-  bulkArchiveFiles: (fileIds) => api.post('media-files/bulk_archive/', { file_ids: fileIds }),
-  bulkRestoreFiles: (fileIds, restoreTier = 'Standard') => api.post('media-files/bulk_restore/', { file_ids: fileIds, restore_tier: restoreTier }),
-  bulkDeleteFiles: (fileIds) => {
+  bulkArchiveFiles: (fileIds, batchId = null) => api.post('media-files/bulk_archive/', { 
+    file_ids: fileIds,
+    batch_id: batchId || undefined,
+  }),
+  bulkRestoreFiles: (fileIds, restoreTier = 'Standard', batchId = null) => api.post('media-files/bulk_restore/', { 
+    file_ids: fileIds, 
+    restore_tier: restoreTier,
+    batch_id: batchId || undefined,
+  }),
+  bulkDeleteFiles: (fileIds, batchId = null, totalFiles = null) => {
     // Create a separate axios instance with longer timeout for bulk deletes
     const bulkDeleteApi = axios.create({
       ...API_CONFIG,
@@ -129,7 +141,11 @@ export const mediaAPI = {
       error => Promise.reject(error)
     );
     
-    return bulkDeleteApi.post('media-files/bulk_delete/', { file_ids: fileIds });
+    return bulkDeleteApi.post('media-files/bulk_delete/', { 
+      file_ids: fileIds,
+      batch_id: batchId || undefined,
+      total_files: totalFiles || undefined,
+    });
   },
   deleteAllFiles: (confirmDeleteAll = true) => api.post('media-files/delete_all/', { confirm_delete_all: confirmDeleteAll }),
   getRestoreTiers: () => api.get('media-files/restore_tiers/'),
@@ -164,9 +180,10 @@ export const mediaAPI = {
   },
 
   // Mark upload as complete and invalidate cache
-  markUploadComplete: (fileIds) => {
+  markUploadComplete: (fileIds, batchId) => {
     return api.post('media-files/mark_upload_complete/', {
-      file_ids: fileIds
+      file_ids: fileIds,
+      batch_id: batchId || null,
     });
   },
 
@@ -187,6 +204,23 @@ export const mediaAPI = {
 export const jobAPI = {
   getJobs: () => api.get('archive-jobs/'),
   getJobStats: () => api.get('archive-jobs/stats/')
+};
+
+export const batchAPI = {
+  createBatch: (operation, totalFiles, totalSizeBytes = 0) => 
+    api.post('file-batches/create_batch/', { 
+      operation, 
+      total_files: totalFiles,
+      total_size_bytes: totalSizeBytes 
+    }),
+  getBatchStatus: (batchId) => api.get(`file-batches/${batchId}/status/`),
+  getActiveBatches: () => api.get('file-batches/active/'),
+  listBatches: () => api.get('file-batches/'),
+  updateBatchProgress: (batchId, { succeeded = 0, failed = 0 } = {}) =>
+    api.post(`file-batches/${batchId}/update_progress/`, {
+      succeeded,
+      failed,
+    }),
 };
 
 export const s3ConfigAPI = {

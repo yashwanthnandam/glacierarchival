@@ -278,8 +278,24 @@ class MediaFileViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'], parser_classes=[JSONParser])
     def get_presigned_urls(self, request):
-        """Get presigned URLs for uploading files - supports both single file and bulk uploads"""
+        """Get presigned URLs for uploading files - supports both single file and bulk uploads with batch tracking"""
+        from ..models import FileBatchJob
+        
         try:
+            # Get or create batch for this upload
+            batch_id = request.data.get('batch_id')
+            batch = None
+            
+            if batch_id:
+                try:
+                    batch = FileBatchJob.objects.get(id=batch_id, user=request.user)
+                    if batch.status == 'pending':
+                        batch.status = 'in_progress'
+                        batch.started_at = timezone.now()
+                        batch.save(update_fields=['status', 'started_at'])
+                except FileBatchJob.DoesNotExist:
+                    pass
+            
             # Files-in-flight limiter (per user): allow up to MAX_CONCURRENT_UPLOADS * 1000 files
             user_id = getattr(request.user, 'id', None)
             files = request.data.get('files', [])
@@ -321,6 +337,15 @@ class MediaFileViewSet(viewsets.ModelViewSet):
                 
                 if 'filename' in first_file and 'fileType' in first_file:
                     # New format from worker - generate POST form presigned URLs
+                    # Response shape is tailored for the frontend upload manager:
+                    # [
+                    #   {
+                    #     "filename": "...",
+                    #     "s3Key": "...",
+                    #     "presignedUrl": { "url": "...", "fields": {...} },
+                    #     "fileId": 123
+                    #   }
+                    # ]
                     for file_info in files:
                         filename = file_info.get('filename')
                         file_type = file_info.get('fileType', 'application/octet-stream')
@@ -369,16 +394,29 @@ class MediaFileViewSet(viewsets.ModelViewSet):
                                 s3_key=s3_key,
                                 relative_path=relative_path,
                                 status='uploading',
-                                encryption_metadata=encryption_metadata
+                                encryption_metadata=encryption_metadata,
+                                batch_job=batch  # Link to batch if provided
                             )
                             
-                            presigned_urls.append({
+                            # Build response entry compatible with BOTH:
+                            # - New React upload manager (expects s3Key + presignedUrl {url, fields})
+                            # - Web Worker (expects url/fields/media_file_id/s3_key and outer 'presigned_urls')
+                            entry = {
+                                # Worker-compatible keys
                                 'filename': filename,
                                 's3_key': s3_key,
                                 'url': presigned_post['url'],
                                 'fields': presigned_post['fields'],
-                                'media_file_id': media_file.id
-                            })
+                                'media_file_id': media_file.id,
+                                # UploadManager / React-compatible keys
+                                's3Key': s3_key,
+                                'presignedUrl': {
+                                    'url': presigned_post['url'],
+                                    'fields': presigned_post['fields'],
+                                },
+                                'fileId': media_file.id,
+                            }
+                            presigned_urls.append(entry)
                         except Exception as e:
                             logger.error(f"Failed to generate presigned POST for {filename}: {str(e)}")
                             continue
@@ -409,9 +447,11 @@ class MediaFileViewSet(viewsets.ModelViewSet):
                             'presigned_urls': file_presigned_urls
                         })
                 
+                # Return both legacy 'presigned_urls' (for worker) and 'results' (for React services)
                 return Response({
                     'presigned_urls': presigned_urls,
-                    'batch_id': request.data.get('batch_id')
+                    'results': presigned_urls,
+                    'batch_id': batch.id if batch else None
                 })
             
             # Single file mode (legacy support)
@@ -557,19 +597,47 @@ class MediaFileViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'], parser_classes=[JSONParser])
     def bulk_delete(self, request):
-        """Bulk delete multiple files efficiently with database transactions"""
+        """Bulk delete multiple files efficiently with database transactions and batch tracking"""
         from django.db import transaction
+        from ..models import FileBatchJob
+        
         file_ids = request.data.get('file_ids', [])
+        batch_id = request.data.get('batch_id')
+        total_files_for_batch = request.data.get('total_files')
         
         if not file_ids:
             return Response({
                 'error': 'No file IDs provided'
             }, status=status.HTTP_400_BAD_REQUEST)
         
-        if len(file_ids) > 1000:
+        if len(file_ids) > 10000:
             return Response({
-                'error': 'Cannot delete more than 1000 files at once. Please select fewer files or contact support for larger deletions.'
+                'error': 'Cannot delete more than 10000 files at once. Please select fewer files.'
             }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Get or create batch job for tracking
+        batch = None
+        if batch_id:
+            try:
+                batch = FileBatchJob.objects.get(id=batch_id, user=request.user)
+                if batch.status == 'pending':
+                    batch.status = 'in_progress'
+                    batch.started_at = timezone.now()
+                    # Only set total_files if it wasn't set during batch creation
+                    if not batch.total_files and total_files_for_batch:
+                        batch.total_files = int(total_files_for_batch or 0)
+                    batch.save(update_fields=['status', 'started_at', 'total_files'])
+            except FileBatchJob.DoesNotExist:
+                batch = None
+
+        if batch is None:
+            batch = FileBatchJob.objects.create(
+                user=request.user,
+                operation='delete',
+                status='in_progress',
+                total_files=len(file_ids),
+                started_at=timezone.now()
+            )
         
         try:
             # Get files that belong to the user and are not already deleted
@@ -600,18 +668,15 @@ class MediaFileViewSet(viewsets.ModelViewSet):
                 
                 # Separate S3 keys for batch operations
                 s3_keys_to_delete = []
-                glacier_archives_to_delete = []
                 
-                # Collect S3 keys and Glacier archives
+                # Collect S3 keys
                 collect_start = time.time()
                 for media_file in files_to_delete:
                     if media_file.s3_key:
                         s3_keys_to_delete.append(media_file.s3_key)
-                    if media_file.glacier_archive_id:
-                        glacier_archives_to_delete.append(media_file.glacier_archive_id)
                 
                 collect_time = time.time() - collect_start
-                logger.info(f"Found {len(s3_keys_to_delete)} S3 files and {len(glacier_archives_to_delete)} Glacier archives to delete (collected in {collect_time:.2f}s)")
+                logger.info(f"Found {len(s3_keys_to_delete)} S3 files to delete (collected in {collect_time:.2f}s)")
                 
                 # Optimize S3 deletions - use batch delete for speed
                 logger.info(f"Deleting {len(s3_keys_to_delete)} S3 files using batch delete")
@@ -664,6 +729,25 @@ class MediaFileViewSet(viewsets.ModelViewSet):
             total_time = time.time() - start_time
             logger.info(f"Total bulk delete operation took {total_time:.2f}s")
             
+            # Increment batch progress
+            from django.db.models import F
+            processed_inc = deleted_count + len(failed_deletions)
+            FileBatchJob.objects.filter(id=batch.id).update(
+                succeeded_files=F('succeeded_files') + deleted_count,
+                failed_files=F('failed_files') + len(failed_deletions),
+                processed_files=F('processed_files') + processed_inc,
+            )
+            batch.refresh_from_db()
+            # Mark completed if we've processed all expected files
+            if batch.total_files and batch.processed_files >= batch.total_files:
+                batch.status = 'completed'
+                batch.completed_at = timezone.now()
+                # Accumulate failed file IDs across calls
+                existing_failed_ids = batch.failed_file_ids or []
+                new_failed_ids = [f['file_id'] for f in failed_deletions]
+                batch.failed_file_ids = list(set(existing_failed_ids + new_failed_ids))
+                batch.save(update_fields=['status', 'completed_at', 'failed_file_ids'])
+            
             # Clear cache for this user to ensure folder structure updates
             user_id = request.user.id
             
@@ -681,6 +765,7 @@ class MediaFileViewSet(viewsets.ModelViewSet):
             
             return Response({
                 'message': f'Bulk delete completed',
+                'batch_id': batch.id,
                 'summary': {
                     'total_requested': len(file_ids),
                     'successfully_deleted': deleted_count,
@@ -692,29 +777,68 @@ class MediaFileViewSet(viewsets.ModelViewSet):
 
         except Exception as e:
             logger.error(f"Bulk delete failed: {str(e)}")
+            batch.status = 'failed'
+            batch.error_message = str(e)
+            batch.save(update_fields=['status', 'error_message'])
             return Response({
-                'error': f'Bulk delete failed: {str(e)}'
+                'error': f'Bulk delete failed: {str(e)}',
+                'batch_id': batch.id
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated], parser_classes=[JSONParser])
     def mark_upload_complete(self, request):
-        """Mark bulk upload as complete and invalidate cache"""
+        """Mark bulk upload as complete and invalidate cache, update batch progress"""
+        from ..models import FileBatchJob
+        from django.db.models import F
+        
         user_id = request.user.id
         file_ids = request.data.get('file_ids', [])
+        batch_id = request.data.get('batch_id')
         
         try:
             # Optionally finalize specific files: move 'uploading' -> 'uploaded'
+            updated_count = 0
             if isinstance(file_ids, list) and file_ids:
                 try:
-                    updated = MediaFile.objects.filter(
+                    updated_count = MediaFile.objects.filter(
                         id__in=file_ids,
                         user_id=user_id,
                         status='uploading',
                         is_deleted=False
                     ).update(status='uploaded')
-                    logger.info(f"[mark_upload_complete] Finalized {updated} files for user {user_id}")
                 except Exception as finalize_err:
                     logger.warning(f"[mark_upload_complete] finalize by ids failed: {finalize_err}")
+            
+            # Update batch progress if batch_id provided
+            if batch_id:
+                try:
+                    batch = FileBatchJob.objects.get(id=batch_id, user_id=user_id)
+
+                    # Fallback: if DB rows were already flipped to 'uploaded' earlier,
+                    # use the number of file_ids as an approximate count so progress still advances.
+                    approx_count = len(file_ids) if isinstance(file_ids, list) else 0
+                    increment = updated_count if updated_count > 0 else approx_count
+
+                    if increment > 0:
+                        # Increment succeeded and processed counts atomically
+                        FileBatchJob.objects.filter(id=batch_id).update(
+                            succeeded_files=F('succeeded_files') + increment,
+                            processed_files=F('processed_files') + increment
+                        )
+                    
+                        # Refresh to get updated values
+                        batch.refresh_from_db()
+
+                        # Check if batch is complete
+                        if batch.total_files and batch.processed_files >= batch.total_files:
+                            batch.status = 'completed'
+                            batch.completed_at = timezone.now()
+                            batch.save(update_fields=['status', 'completed_at'])
+                        
+                except FileBatchJob.DoesNotExist:
+                    logger.warning(f"Batch {batch_id} not found for user {user_id}")
+                except Exception as batch_err:
+                    logger.error(f"Failed to update batch {batch_id}: {batch_err}")
             
             # Validate that all files belong to the user
             if file_ids:
@@ -734,7 +858,8 @@ class MediaFileViewSet(viewsets.ModelViewSet):
             return Response({
                 'message': 'Upload marked as complete and cache invalidated',
                 'new_version': new_version,
-                'files_processed': len(file_ids)
+                'files_processed': len(file_ids),
+                'batch_id': batch_id
             })
         except Exception as cache_error:
             return Response({
@@ -894,7 +1019,11 @@ class MediaFileViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['post'], parser_classes=[JSONParser])
     def bulk_archive(self, request):
         """Archive multiple files in one request."""
+        from ..models import FileBatchJob
+        from django.db.models import F
+        
         file_ids = request.data.get('file_ids', [])
+        batch_id = request.data.get('batch_id')
 
         if not file_ids:
             return Response({'error': 'No file IDs provided'}, status=status.HTTP_400_BAD_REQUEST)
@@ -904,6 +1033,19 @@ class MediaFileViewSet(viewsets.ModelViewSet):
 
         from ..services import MediaFileService
         media_service = MediaFileService(request.user)
+
+        # Optional FileBatchJob for unified backend progress tracking
+        batch = None
+        if batch_id:
+            try:
+                batch = FileBatchJob.objects.get(id=batch_id, user=request.user)
+                # Mark as in_progress on first use
+                if batch.status == 'pending':
+                    batch.status = 'in_progress'
+                    batch.started_at = timezone.now()
+                    batch.save(update_fields=['status', 'started_at'])
+            except FileBatchJob.DoesNotExist:
+                batch = None
 
         succeeded = []
         failed = []
@@ -915,6 +1057,23 @@ class MediaFileViewSet(viewsets.ModelViewSet):
                 succeeded.append(media_file.id)
             except Exception as e:
                 failed.append({'id': media_file.id, 'error': str(e)})
+
+        # Update batch progress if tracking is enabled
+        if batch:
+            succeeded_count = len(succeeded)
+            failed_count = len(failed)
+            total_inc = succeeded_count + failed_count
+            if total_inc > 0:
+                FileBatchJob.objects.filter(id=batch.id).update(
+                    succeeded_files=F('succeeded_files') + succeeded_count,
+                    failed_files=F('failed_files') + failed_count,
+                    processed_files=F('processed_files') + total_inc,
+                )
+                batch.refresh_from_db()
+                if batch.total_files and batch.processed_files >= batch.total_files and batch.status in ['pending', 'in_progress']:
+                    batch.status = 'completed'
+                    batch.completed_at = timezone.now()
+                    batch.save(update_fields=['status', 'completed_at'])
 
         return Response({
             'message': 'Bulk archive completed',
@@ -1017,28 +1176,83 @@ class MediaFileViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'], parser_classes=[JSONParser])
     def bulk_restore(self, request):
-        """Restore multiple archived files in one request."""
+        """
+        Restore multiple archived files in one request.
+        Files in bundles will be restored at bundle level.
+        """
+        from ..models import FileBatchJob
+        from django.db.models import F
+
         file_ids = request.data.get('file_ids', [])
         restore_tier = request.data.get('restore_tier', 'Standard')
+        batch_id = request.data.get('batch_id')
 
         if not file_ids:
             return Response({'error': 'No file IDs provided'}, status=status.HTTP_400_BAD_REQUEST)
 
-        files = MediaFile.objects.filter(id__in=file_ids, user=request.user, is_deleted=False)
+        files = MediaFile.objects.filter(
+            id__in=file_ids, 
+            user=request.user, 
+            is_deleted=False
+        ).select_related('archive_bundle')
 
         from ..services import MediaFileService
+        from ..models import ArchiveBundle
         media_service = MediaFileService(request.user)
+
+        # Optional FileBatchJob for unified backend progress tracking
+        batch = None
+        if batch_id:
+            try:
+                batch = FileBatchJob.objects.get(id=batch_id, user=request.user)
+                if batch.status == 'pending':
+                    batch.status = 'in_progress'
+                    batch.started_at = timezone.now()
+                    batch.save(update_fields=['status', 'started_at'])
+            except FileBatchJob.DoesNotExist:
+                batch = None
 
         succeeded = []
         failed = []
+        bundles_restored = set()
+        
         for media_file in files:
             try:
                 if media_file.status != 'archived':
                     raise ValueError('File is not archived')
-                media_service.restore_file(media_file, restore_tier)
-                succeeded.append(media_file.id)
+                
+                # Check if file belongs to a bundle
+                if media_file.archive_bundle:
+                    # Only restore the bundle once
+                    bundle_id = media_file.archive_bundle.id
+                    if bundle_id not in bundles_restored:
+                        media_service.restore_bundle(media_file.archive_bundle, restore_tier)
+                        bundles_restored.add(bundle_id)
+                    succeeded.append(media_file.id)
+                else:
+                    # Legacy file without bundle
+                    media_service.restore_file(media_file, restore_tier)
+                    succeeded.append(media_file.id)
+                    
             except Exception as e:
                 failed.append({'id': media_file.id, 'error': str(e)})
+
+        # Update batch progress if tracking is enabled
+        if batch:
+            succeeded_count = len(succeeded)
+            failed_count = len(failed)
+            total_inc = succeeded_count + failed_count
+            if total_inc > 0:
+                FileBatchJob.objects.filter(id=batch.id).update(
+                    succeeded_files=F('succeeded_files') + succeeded_count,
+                    failed_files=F('failed_files') + failed_count,
+                    processed_files=F('processed_files') + total_inc,
+                )
+                batch.refresh_from_db()
+                if batch.total_files and batch.processed_files >= batch.total_files and batch.status in ['pending', 'in_progress']:
+                    batch.status = 'completed'
+                    batch.completed_at = timezone.now()
+                    batch.save(update_fields=['status', 'completed_at'])
 
         return Response({
             'message': 'Bulk restore initiated',
@@ -1046,10 +1260,58 @@ class MediaFileViewSet(viewsets.ModelViewSet):
                 'total_requested': len(file_ids),
                 'successfully_started': len(succeeded),
                 'failed': len(failed),
+                'bundles_restored': len(bundles_restored),
                 'restore_tier': restore_tier
             },
             'failed_files': failed
         })
+    
+    @action(detail=False, methods=['get'])
+    def bundles(self, request):
+        """List all archive bundles for the user"""
+        from ..models import ArchiveBundle
+        from ..serializers import ArchiveBundleSerializer
+        
+        bundles = ArchiveBundle.objects.filter(user=request.user).order_by('-created_at')
+        
+        # Optional status filter
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            bundles = bundles.filter(status=status_filter)
+        
+        serializer = ArchiveBundleSerializer(bundles, many=True)
+        return Response({'bundles': serializer.data})
+    
+    @action(detail=False, methods=['post'])
+    def restore_bundle(self, request):
+        """Restore a specific bundle by ID"""
+        from ..models import ArchiveBundle
+        from ..services import MediaFileService
+        
+        bundle_id = request.data.get('bundle_id')
+        restore_tier = request.data.get('restore_tier', 'Standard')
+        
+        if not bundle_id:
+            return Response({'error': 'Bundle ID is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            bundle = ArchiveBundle.objects.get(id=bundle_id, user=request.user)
+        except ArchiveBundle.DoesNotExist:
+            return Response({'error': 'Bundle not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        try:
+            media_service = MediaFileService(request.user)
+            updated_bundle = media_service.restore_bundle(bundle, restore_tier)
+            
+            from ..serializers import ArchiveBundleSerializer
+            serializer = ArchiveBundleSerializer(updated_bundle)
+            
+            return Response({
+                'message': f'Bundle restore initiated',
+                'bundle': serializer.data
+            })
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(['POST'])

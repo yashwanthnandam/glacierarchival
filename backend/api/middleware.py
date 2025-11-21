@@ -108,7 +108,7 @@ class RateLimitMiddleware(MiddlewareMixin):
             window = 60  # 1 minute window
         elif request.path.startswith('/api/media-files/'):
             # File operations - moderate limit
-            limit = 100000
+            limit = 1000000
             window = 60  # 1 minute window
         else:
             # Other API calls - more lenient

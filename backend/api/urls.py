@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from .views import (
     MediaFileViewSet, 
+    FileBatchJobViewSet,
     ArchiveJobViewSet, 
     S3ConfigViewSet, 
     HibernationPlanViewSet,
@@ -27,6 +28,7 @@ from .secure_auth import (
 
 router = DefaultRouter()
 router.register(r'media-files', MediaFileViewSet, basename='mediafile')
+router.register(r'file-batches', FileBatchJobViewSet, basename='filebatchjob')
 router.register(r'archive-jobs', ArchiveJobViewSet, basename='archivejob')
 router.register(r's3-config', S3ConfigViewSet, basename='s3config')
 router.register(r'hibernation-plans', HibernationPlanViewSet, basename='hibernationplan')

@@ -193,8 +193,8 @@ CELERY_TASK_ACKS_LATE = True
 # Celery Beat schedule
 from celery.schedules import crontab
 CELERY_BEAT_SCHEDULE = {
-    'sync-restore-status-every-15-min': {
-        'task': 'api.sync_restore_status',
+    'check-bundle-restores-every-15-min': {
+        'task': 'api.check_bundle_restores',
         'schedule': crontab(minute='*/15'),
     },
     'snapshot-storage-costs-nightly': {

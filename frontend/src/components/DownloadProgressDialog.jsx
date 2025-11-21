@@ -21,14 +21,14 @@ const DownloadProgressDialog = ({ open, onClose, downloadInfo }) => {
   const [success, setSuccess] = useState(false);
 
   useEffect(() => {
-    if (open && downloadInfo) {
+    if (open) {
       setProgress(0);
       setStatus('Starting download...');
       setIsDecrypting(false);
       setError(null);
       setSuccess(false);
     }
-  }, [open, downloadInfo]);
+  }, [open]);
 
   const handleClose = () => {
     if (!isDecrypting) {
@@ -36,25 +36,16 @@ const DownloadProgressDialog = ({ open, onClose, downloadInfo }) => {
     }
   };
 
-  const simulateProgress = () => {
-    let currentProgress = 0;
-    const interval = setInterval(() => {
-      currentProgress += Math.random() * 10;
-      if (currentProgress >= 90) {
-        currentProgress = 90;
-        clearInterval(interval);
-        // Don't automatically set success - let the parent component handle it
-        setStatus('Preparing download...');
-      }
-      setProgress(currentProgress);
-    }, 300);
-  };
-
+  // Bind to real progress/message from parent
   useEffect(() => {
-    if (open && downloadInfo) {
-      simulateProgress();
+    if (!downloadInfo) return;
+    if (typeof downloadInfo.progress === 'number') {
+      setProgress(downloadInfo.progress);
     }
-  }, [open, downloadInfo]);
+    if (typeof downloadInfo.message === 'string') {
+      setStatus(downloadInfo.message);
+    }
+  }, [downloadInfo?.progress, downloadInfo?.message]);
 
   // Listen for success from parent component
   useEffect(() => {

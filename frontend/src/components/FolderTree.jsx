@@ -673,19 +673,35 @@ const FolderTree = ({
                   </Tooltip>
                 )}
                 
-                {/* Restore button (for archived files) - Always show for testing */}
-                {((item.file?.status === 'archived' || item.file?.status === 'uploaded') || !item.file?.status) && (
-                  <Tooltip title="Restore from Glacier">
-                    <IconButton
-                      size="small"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleFileAction(item.file, 'restore');
-                      }}
-                      sx={{ bgcolor: 'background.paper', boxShadow: 1 }}
-                    >
-                      <RestoreFromTrash fontSize="small" />
-                    </IconButton>
+                {/* Restore button (for archived files) - Only if can restore individually or is bundle root */}
+                {item.file?.status === 'archived' && (
+                  <Tooltip title={
+                    item.file?.can_restore_individually === false 
+                      ? `Part of bundle "${item.file?.bundle_name}" - restore the entire bundle` 
+                      : "Restore from Glacier"
+                  }>
+                    <span>
+                      <IconButton
+                        size="small"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (item.file?.can_restore_individually !== false) {
+                            handleFileAction(item.file, 'restore');
+                          } else {
+                            // Show info that bundle must be restored
+                            alert(`This file is part of archive bundle "${item.file?.bundle_name}". Please restore the entire bundle instead of individual files.`);
+                          }
+                        }}
+                        sx={{ 
+                          bgcolor: 'background.paper', 
+                          boxShadow: 1,
+                          opacity: item.file?.can_restore_individually === false ? 0.5 : 1
+                        }}
+                        disabled={item.file?.can_restore_individually === false}
+                      >
+                        <RestoreFromTrash fontSize="small" />
+                      </IconButton>
+                    </span>
                   </Tooltip>
                 )}
                 

@@ -145,6 +145,15 @@ class UploadManager {
         error: item.error
       }));
     
+    // Compute percentage using stable session counters when active to prevent stalls
+    let percentage;
+    if (this._uploadSessionActive && this._currentSessionTotal > 0) {
+      const processed = (this._cumulativeCompleted || 0) + (this._cumulativeFailed || 0) + (this._cumulativeCancelled || 0);
+      percentage = Math.min(100, Math.round((processed / this._currentSessionTotal) * 100));
+    } else {
+      percentage = this.queue.length > 0 ? Math.round((completed / this.queue.length) * 100) : 0;
+    }
+
     const state = {
       isRunning: inProgress > 0,
       activeCount: inProgress,
@@ -165,7 +174,7 @@ class UploadManager {
       deleteOperationsCount: deleteOps,
       deleteInProgress,
       totalSize,
-      percentage: this.queue.length > 0 ? Math.round((completed / this.queue.length) * 100) : 0
+      percentage
     };
     
     return state;
@@ -206,20 +215,15 @@ class UploadManager {
     this._cumulativeCompleted = 0; // Reset cumulative completed counter
     this._cumulativeFailed = 0; // Reset cumulative failed counter
     this._cumulativeCancelled = 0; // Reset cumulative cancelled counter
-    
-    // Mark upload as complete and invalidate cache
-    try {
-      // Use tracked set of completed fileIds, since completed items may be removed from queue
-      const completedFileIds = Array.from(this._completedFileIds);
-      
-      if (completedFileIds.length > 0) {
-        const { mediaAPI } = await import('./api');
-        await mediaAPI.markUploadComplete(completedFileIds);
-      }
-    } catch (error) {
-      console.error('Failed to mark upload as complete:', error);
-    }
-    
+
+    // NOTE: We no longer call mark_upload_complete here, because the new
+    // upload flow (DirectoryUploader + Web Worker) already calls
+    // mediaAPI.markUploadComplete with the correct batch_id for each
+    // completed chunk. Calling it here again without a batch_id caused
+    // confusing extra backend calls and broke backend-driven progress.
+    //
+    // Cache invalidation is handled inside mark_upload_complete.
+
     // Clear completed ids after attempting to finalize
     this._completedFileIds.clear();
     this._cleanupCompletedItems(); // Cleanup after upload ends

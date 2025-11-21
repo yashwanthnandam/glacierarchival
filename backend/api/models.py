@@ -84,7 +84,6 @@ class MediaFile(models.Model):
     archived_at = models.DateTimeField(blank=True, null=True)
     description = models.TextField(blank=True, null=True)
     checksum = models.CharField(max_length=64, blank=True, null=True, help_text='File checksum for integrity')
-    glacier_archive_id = models.CharField(max_length=255, blank=True, null=True, help_text='Glacier archive ID')
     restore_tier = models.CharField(max_length=20, choices=[
         ('Expedited', 'Expedited (1-5 min)'),
         ('Standard', 'Standard (3-5 hours)'),
@@ -97,6 +96,14 @@ class MediaFile(models.Model):
     is_encrypted = models.BooleanField(default=False, help_text='Whether the file is encrypted')
     storage_cost = models.DecimalField(max_digits=10, decimal_places=4, blank=True, null=True, help_text='Storage cost in USD')
     last_accessed = models.DateTimeField(blank=True, null=True, help_text='Last time the file was accessed')
+    
+    # Archive bundle relationship - files in a bundle can only be restored as a bundle
+    archive_bundle = models.ForeignKey('ArchiveBundle', on_delete=models.SET_NULL, null=True, blank=True, 
+                                       related_name='files', help_text='Archive bundle this file belongs to')
+    
+    # Batch job tracking - optional link to upload/delete/archive/restore batch
+    batch_job = models.ForeignKey('FileBatchJob', on_delete=models.SET_NULL, null=True, blank=True,
+                                  related_name='files', help_text='Batch job this file belongs to')
 
     class Meta:
         ordering = ['-uploaded_at']
@@ -127,6 +134,130 @@ class MediaFile(models.Model):
     def is_restored(self):
         """Check if file is restored"""
         return self.status == 'restored'
+
+class FileBatchJob(models.Model):
+    """
+    Unified batch job tracking for all heavy file operations.
+    Provides simple, DB-backed progress tracking for upload/delete/archive/restore.
+    """
+    OPERATION_CHOICES = [
+        ('upload', 'Upload'),
+        ('delete', 'Delete'),
+        ('archive', 'Archive'),
+        ('restore', 'Restore'),
+    ]
+    
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('in_progress', 'In Progress'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+        ('cancelled', 'Cancelled'),
+    ]
+    
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='file_batches', db_index=True)
+    operation = models.CharField(max_length=20, choices=OPERATION_CHOICES, db_index=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', db_index=True)
+    
+    # Progress tracking
+    total_files = models.IntegerField(default=0, help_text='Total files in this batch')
+    processed_files = models.IntegerField(default=0, help_text='Files processed (success + failed)')
+    succeeded_files = models.IntegerField(default=0, help_text='Successfully processed files')
+    failed_files = models.IntegerField(default=0, help_text='Failed files')
+    
+    # Size tracking
+    total_size_bytes = models.BigIntegerField(default=0, help_text='Total size of all files')
+    processed_size_bytes = models.BigIntegerField(default=0, help_text='Size processed so far')
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    started_at = models.DateTimeField(blank=True, null=True)
+    completed_at = models.DateTimeField(blank=True, null=True)
+    
+    # Error tracking
+    error_message = models.TextField(blank=True, null=True)
+    failed_file_ids = models.JSONField(default=list, help_text='List of failed file IDs')
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'status']),
+            models.Index(fields=['user', 'operation']),
+            models.Index(fields=['status', 'created_at']),
+        ]
+        verbose_name = "File Batch Job"
+        verbose_name_plural = "File Batch Jobs"
+    
+    def __str__(self):
+        return f"{self.operation} - {self.user.username} - {self.status} ({self.processed_files}/{self.total_files})"
+    
+    @property
+    def percentage(self):
+        """Calculate completion percentage"""
+        if self.total_files == 0:
+            return 0
+        return min(100, int((self.processed_files / self.total_files) * 100))
+    
+    @property
+    def is_active(self):
+        """Check if batch is actively processing"""
+        return self.status in ['pending', 'in_progress']
+    
+    @property
+    def is_complete(self):
+        """Check if batch is complete"""
+        return self.status == 'completed'
+
+
+class ArchiveBundle(models.Model):
+    """
+    Represents a ZIP bundle stored in Glacier.
+    Multiple MediaFiles can belong to one bundle.
+    Only bundles can be restored, not individual files.
+    """
+    STATUS_CHOICES = [
+        ('creating', 'Creating'),
+        ('archived', 'Archived'),
+        ('restoring', 'Restoring'),
+        ('restored', 'Restored'),
+        ('failed', 'Failed'),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='archive_bundles', db_index=True)
+    bundle_name = models.CharField(max_length=255, help_text='Unique bundle name/ID')
+    s3_key = models.CharField(max_length=500, help_text='S3 key for the ZIP bundle')
+    glacier_archive_id = models.CharField(max_length=255, blank=True, null=True, help_text='Glacier archive ID for the ZIP')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='creating', db_index=True)
+    total_files = models.IntegerField(default=0, help_text='Number of files in this bundle')
+    total_size_bytes = models.BigIntegerField(default=0, help_text='Total size of all files in bundle')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    archived_at = models.DateTimeField(blank=True, null=True, help_text='When bundle was archived to Glacier')
+    restored_at = models.DateTimeField(blank=True, null=True, help_text='When bundle was restored')
+    restore_tier = models.CharField(max_length=20, blank=True, null=True, help_text='Glacier restore tier used')
+    estimated_completion = models.DateTimeField(blank=True, null=True, help_text='Estimated restore completion time')
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'status']),
+            models.Index(fields=['user', 'created_at']),
+        ]
+        verbose_name = "Archive Bundle"
+        verbose_name_plural = "Archive Bundles"
+
+    def __str__(self):
+        return f"{self.bundle_name} - {self.status} ({self.total_files} files)"
+
+    @property
+    def is_restorable(self):
+        """Check if bundle can be restored"""
+        return self.status == 'archived'
+
+    @property
+    def is_restored(self):
+        """Check if bundle is restored"""
+        return self.status == 'restored'
+
 
 class ArchiveJob(models.Model):
     STATUS_CHOICES = [

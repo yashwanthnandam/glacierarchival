@@ -15,3 +15,4 @@ sentry-sdk[django]==2.19.0
 django-redis==5.4.0
 celery==5.3.4
 redis==5.0.1
+zipstream-ng==1.7.1

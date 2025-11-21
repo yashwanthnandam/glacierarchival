@@ -3,10 +3,11 @@
 
 let accessToken = null;
 let apiBaseUrl = 'http://localhost:8000/api'; // Default fallback
+let currentBatchId = null; // Optional FileBatchJob ID for backend progress tracking
 let cancelled = false; // shared across messages so cancel propagates
 
 self.onmessage = function(e) {
-  const { type, files, sessionId, batchSize, accessToken: token, apiBaseUrl: baseUrl } = e.data;
+  const { type, files, sessionId, batchSize, accessToken: token, apiBaseUrl: baseUrl, batchId } = e.data;
   
   // Store API base URL if provided
   if (baseUrl) {
@@ -27,6 +28,7 @@ self.onmessage = function(e) {
   if (type === 'upload') {
     accessToken = token; // Store the token for use in requests
     cancelled = false;   // reset any previous cancel state at the start of an upload
+    currentBatchId = batchId || null;
     
     /**
      * Calculate optimal concurrency based on average file size
@@ -129,7 +131,9 @@ self.onmessage = function(e) {
           },
           credentials: 'include',
           body: JSON.stringify({
-            files: fileMetadata
+            files: fileMetadata,
+            // Optional link to backend FileBatchJob for progress tracking
+            batch_id: currentBatchId,
           })
         }, 3); // 3 retries
         
@@ -226,7 +230,10 @@ self.onmessage = function(e) {
               success: false,
               file: fileData.name,
               path: fileData.relativePath,
-              error: cancelled ? 'Upload cancelled' : error.message
+              error: cancelled ? 'Upload cancelled' : error.message,
+              // Include IDs so the main thread can report failures to backend if needed
+              mediaFileId: presignedData.media_file_id,
+              s3Key: presignedData.s3_key
             };
           }
         };
@@ -252,23 +259,20 @@ self.onmessage = function(e) {
           
           results.push(...chunkResults);
           
-          // Throttled progress update - only send every 200ms
+          // Always send progress update after each chunk to avoid stalling at fixed fractions
           const now = performance.now();
-          if (now - lastProgressUpdate >= PROGRESS_UPDATE_INTERVAL) {
-            lastProgressUpdate = now;
-            // Send progress update for this batch
-            self.postMessage({
-              type: 'progress',
-              data: {
-                completed: results.length,
-                total: fileBatch.length,
-                results: results,
-                placeholderId: null,
-                progress: (results.length / fileBatch.length) * 100,
-                status: 'uploading'
-              }
-            });
-          }
+          lastProgressUpdate = now;
+          self.postMessage({
+            type: 'progress',
+            data: {
+              completed: results.length,
+              total: fileBatch.length,
+              results: results,
+              placeholderId: null,
+              progress: (results.length / fileBatch.length) * 100,
+              status: 'uploading'
+            }
+          });
           
           // Brief pause to avoid overwhelming the browser
           if (i + CONCURRENT_UPLOADS < fileBatch.length && !cancelled) {
@@ -327,7 +331,7 @@ self.onmessage = function(e) {
               total: files.length,
               results: allResults,
               placeholderId: null,
-              progress: (allResults.length / files.length) * 100,
+              progress: Math.min(100, Math.max(0, (allResults.length / files.length) * 100)),
               status: 'uploading'
             }
           });

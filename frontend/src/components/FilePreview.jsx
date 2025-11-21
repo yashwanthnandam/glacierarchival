@@ -305,8 +305,14 @@ const FilePreview = ({
                       startIcon={<RestoreFromTrash />}
                       fullWidth
                       onClick={() => handleAction('restore')}
+                      disabled={file.can_restore_individually === false}
+                      title={
+                        file.can_restore_individually === false
+                          ? `Part of bundle "${file.bundle_name}" - restore entire bundle`
+                          : 'Restore from Glacier'
+                      }
                     >
-                      Restore
+                      {file.can_restore_individually === false ? 'Bundle Only' : 'Restore'}
                     </Button>
                   </Grid>
                 )}

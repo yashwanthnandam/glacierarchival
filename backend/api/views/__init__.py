@@ -2,7 +2,7 @@
 from .file_views import MediaFileViewSet, create_folder
 
 # Archive and storage views  
-from .archive_views import ArchiveJobViewSet, S3ConfigViewSet
+from .archive_views import FileBatchJobViewSet, ArchiveJobViewSet, S3ConfigViewSet
 
 # Authentication views
 from .auth_views import (
@@ -31,6 +31,7 @@ __all__ = [
     'create_folder',
     
     # Archive and storage
+    'FileBatchJobViewSet',
     'ArchiveJobViewSet',
     'S3ConfigViewSet',
     

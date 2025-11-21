@@ -296,6 +296,27 @@ logs/
 *.tar.gz
 *.rar
 
+# Test/download files
+*.pdf
+*.dmg
+*.pkg
+*.deb
+*.rpm
+
+# Temporary download directories (hash-named - browser auto-extracted ZIPs)
+[0-9a-f]{32}/
+[0-9a-f]{40}/
+[0-9a-f]{64}/
+
+# Project temp directory (for backend temp files)
+# Keep .gitkeep but ignore all other files
+.temp/*
+!.temp/.gitkeep
+
+# Old test directories
+files-till-*/
+download_*.zip
+
 # Environment files
 .env
 .env.*

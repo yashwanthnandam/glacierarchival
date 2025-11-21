@@ -111,18 +111,10 @@ class Command(BaseCommand):
             )
 
     def delete_from_aws(self, file_obj, s3_service):
-        """Delete file from AWS S3 and Glacier"""
+        """Delete file from AWS S3"""
         try:
             # Delete from S3
             s3_service.delete_file(file_obj.s3_key)
-            
-            # If file is archived, also delete from Glacier
-            if file_obj.status == 'archived' and file_obj.glacier_archive_id:
-                try:
-                    s3_service.delete_glacier_archive(file_obj.glacier_archive_id)
-                except Exception as e:
-                    logger.warning(f'Could not delete Glacier archive {file_obj.glacier_archive_id}: {e}')
-                    
         except Exception as e:
             logger.error(f'Error deleting {file_obj.s3_key} from AWS: {e}')
             raise

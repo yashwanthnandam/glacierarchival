@@ -67,7 +67,7 @@ import {
   Close,
 } from '@mui/icons-material';
 import { keyframes } from '@mui/system';
-import { mediaAPI, hibernationAPI } from '../services/api';
+import { mediaAPI, hibernationAPI, batchAPI } from '../services/api';
 import { useFileActions } from '../hooks/useFileActions';
 import DirectoryUploader from './DirectoryUploader';
 import DownloadProgressDialog from './DownloadProgressDialog';
@@ -76,6 +76,7 @@ import uploadManager from '../services/uploadManager';
 import FileGridToolbar from './FileGridToolbar';
 import FileStatusSummary from './FileStatusSummary';
 import BulkOperationProgress from './BulkOperationProgress';
+import useBatchProgress from '../hooks/useBatchProgress';
 import FileGrid from './FileGrid';
 // import VirtualizedFileGrid from './VirtualizedFileGrid'; // Temporarily disabled due to react-window import issues
 import FileDetailsPanel from './FileDetailsPanel';
@@ -103,27 +104,15 @@ const formatDate = (dateString) => {
 
   // ULTRA SIMPLE Upload Progress Bar - No flickering
 const UploadProgressBar = memo(({ uploadManagerState, files }) => {
-  // Extract values with defaults - use upload-specific totals for global progress
+  // Note: Upload progress is now shown via the backend-driven batch bar below,
+  // so this component only renders when uploadManager reports an in-progress session.
   const total = uploadManagerState?.uploadTotal || 0;
-  const completed = uploadManagerState?.uploadCompleted || 0;
-  const failed = uploadManagerState?.uploadFailed || 0;
-  const cancelled = uploadManagerState?.uploadCancelled || 0;
   const inProgress = uploadManagerState?.uploadInProgress || 0;
   const queued = uploadManagerState?.uploadQueued || 0;
-  
-  // Calculate percentage based on processed files (completed + failed + cancelled), not just successful
-  const processedRaw = completed + failed + cancelled;
-  const processed = Math.min(processedRaw, total);
-  // Remove buffer to avoid confusing counts after cancel; show exact processed
-  const effectiveProcessed = processed;
-  const percentage = total > 0 ? Math.floor((effectiveProcessed / total) * 100) : 0;
-  
-  // Show progress bar only if there's an active upload session
-  // Avoid showing misleading "0/0" bar after cancel when DB still has files in uploading state
+
   const hasActiveUploadSession = total > 0 && (inProgress > 0 || queued > 0);
-  const showBar = hasActiveUploadSession && percentage < 100;
-  if (!showBar) return null;
-  
+  if (!hasActiveUploadSession) return null;
+
   const handleCancel = () => {
     uploadManager.cancelAllUploads();
   };
@@ -135,18 +124,8 @@ const UploadProgressBar = memo(({ uploadManagerState, files }) => {
           <CloudUpload sx={{ color: '#60a5fa' }} />
           <Box sx={{ flex: 1 }}>
             <Typography variant="body2" sx={{ fontWeight: 600 }}>
-              📤 Uploading {effectiveProcessed}/{total} files ({percentage}%)
-              {(failed > 0 || cancelled > 0) && (
-                <Typography component="span" variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
-                  {failed > 0 ? `(${failed} failed` : '('}{cancelled > 0 ? `${failed > 0 ? ', ' : ''}${cancelled} cancelled` : ''})
-                </Typography>
-              )}
+              📤 Upload in progress...
             </Typography>
-            <LinearProgress 
-              variant="determinate" 
-              value={percentage} 
-              sx={{ mt: 1, height: 8, borderRadius: 4 }} 
-            />
           </Box>
           <Button
             variant="outlined"
@@ -190,6 +169,8 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery,
   const [overallUploadProgress, setOverallUploadProgress] = useState(0);
   const [overallUploadLabel, setOverallUploadLabel] = useState('');
   const [encryptionEnabled, setEncryptionEnabled] = useState(false);
+  const [activeBatchId, setActiveBatchId] = useState(null);
+  const [activeBatchOperation, setActiveBatchOperation] = useState(null); // 'upload' | 'hibernate' | 'restore' | 'delete'
   const showLeftPanel = false; // Hide sidebar for edge-to-edge layout
   
   // Disable Upload only when uploads are actively in progress (not just queued/completed)
@@ -210,6 +191,20 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery,
       subtitle: activeTab === 0 ? 'Click here or drag files to upload' : 'Hibernate some files to see them here'
     };
   }, [hasUploadOperations, activeTab]);
+
+  // Backend-driven batch progress for bulk archive/restore/delete
+  const {
+    batchData: operationBatch,
+    progress: operationBatchProgress,
+    isComplete: operationBatchComplete,
+  } = useBatchProgress(activeBatchId, { enabled: !!activeBatchId });
+
+  useEffect(() => {
+    if (operationBatchComplete) {
+      setActiveBatchId(null);
+      setActiveBatchOperation(null);
+    }
+  }, [operationBatchComplete]);
   
   // File actions (archive/delete/download); restore handled inline with Standard tier
   const { 
@@ -464,11 +459,25 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery,
     }
 
     // Start progress tracking
-        setBulkOperationType('hibernate');
-        setBulkOperationStatus('in_progress');
-        setBulkOperationProgress({});
-        
-    // Initialize progress for all files
+    setBulkOperationType('hibernate');
+    setBulkOperationStatus('in_progress');
+    setBulkOperationProgress({});
+
+    // Create backend batch job for unified archive progress
+    try {
+      const totalFiles = hibernatableFiles.length;
+      const totalSizeBytes = hibernatableFiles.reduce(
+        (sum, f) => sum + (f.file_size || f.size || 0),
+        0
+      );
+      const batchResp = await batchAPI.createBatch('archive', totalFiles, totalSizeBytes);
+      setActiveBatchId(batchResp?.data?.id || null);
+      setActiveBatchOperation('hibernate');
+    } catch (_e) {
+      // Non-fatal: we still proceed with client-side per-file progress
+    }
+
+    // Initialize local per-file progress
     hibernatableFiles.forEach(file => {
       setBulkOperationProgress(prev => ({
         ...prev,
@@ -506,7 +515,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery,
         // Call bulk archive API for this batch
         const ids = batch.map(f => f.id);
         try {
-          const response = await mediaAPI.bulkArchiveFiles(ids);
+          const response = await mediaAPI.bulkArchiveFiles(ids, activeBatchId);
           const failed = response?.data?.failed_files || [];
           const failedIds = new Set(failed.map(f => f.id));
 
@@ -604,12 +613,29 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery,
         } catch (_) { /* ignore */ }
       }
 
+      // Create backend batch job for unified restore progress
+      let restoreBatchId = null;
+      const totalFiles = restoreIds.length;
+      if (totalFiles > 0) {
+        const totalSizeBytes = restoreIds.reduce((sum, _id) => sum, 0); // Size not critical here
+        try {
+          const batchResp = await batchAPI.createBatch('restore', totalFiles, totalSizeBytes);
+          restoreBatchId = batchResp?.data?.id || null;
+          setActiveBatchId(restoreBatchId);
+          setActiveBatchOperation('restore');
+        } catch (_e) {
+          // Non-fatal
+        }
+      }
+
       // Batch restore using bulk endpoint in chunks
+      // Backend will automatically handle bundle-level restoration
+      // Files in the same bundle will only trigger one restore request
       const BATCH_SIZE = 25;
       for (let i = 0; i < restoreIds.length; i += BATCH_SIZE) {
         const batch = restoreIds.slice(i, i + BATCH_SIZE);
         if (batch.length > 0) {
-          await mediaAPI.bulkRestoreFiles(batch, 'Standard');
+          await mediaAPI.bulkRestoreFiles(batch, 'Standard', restoreBatchId);
           await new Promise(r => setTimeout(r, 500));
         }
       }
@@ -631,6 +657,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery,
     const selectedFoldersList = getSelectedFolders();
     
     if (selectedFilesList.length === 0 && selectedFoldersList.length === 0) {
+      handleBulkDownload.active = false;
       return;
     }
 
@@ -660,9 +687,26 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery,
 
     if (downloadableFiles.length === 0) {
       alert('No files available for download. Files must be in "uploaded" or "restored" state.');
+      handleBulkDownload.active = false;
       return;
     }
 
+    // Calculate total size
+    const totalSize = downloadableFiles.reduce((sum, f) => sum + f.file_size, 0);
+    const SIZE_THRESHOLD = 500 * 1024 * 1024; // 500 MB threshold
+    const hasEncryptedFiles = downloadableFiles.some(f => f.is_encrypted);
+
+    // Check if we should use server-side ZIP
+    if (totalSize >= SIZE_THRESHOLD) {
+      try {
+        await handleServerSideBulkDownload(downloadableFiles, hasEncryptedFiles, totalSize);
+      } finally {
+        handleBulkDownload.active = false;
+      }
+      return;
+    }
+
+    // Use client-side ZIP for smaller downloads
     try {
       // Show download progress dialog
       setDownloadInfo({
@@ -741,72 +785,84 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery,
         const JSZip = (await import('jszip')).default;
         const zip = new JSZip();
 
-      // Download files in parallel (with concurrency limit)
+        // Download files in parallel with enforced concurrency per batch
         const CONCURRENCY_LIMIT = 5;
-      const downloadPromises = [];
-      
-      for (let i = 0; i < downloadUrls.length; i += CONCURRENCY_LIMIT) {
-        const batch = downloadUrls.slice(i, i + CONCURRENCY_LIMIT);
-        const batchPromises = batch.map(async (downloadInfo, batchIndex) => {
-          const globalIndex = i + batchIndex;
-          
-          if (downloadInfo.error) {
-            console.error(`Download failed for ${downloadInfo.filename}: ${downloadInfo.error}`);
-            return;
+        let completedFiles = 0;
+        let lastUiProgress = 0;
+        let lastUiTime = 0;
+
+        const updateProgress = (message) => {
+          const now = Date.now();
+          const next = Math.max(lastProgressRef.current, Math.min(99, Math.round((completedFiles / downloadUrls.length) * 90)));
+          if ((next - lastUiProgress >= 1) || (now - lastUiTime >= 100)) {
+            lastProgressRef.current = next;
+            lastUiProgress = next;
+            lastUiTime = now;
+            setDownloadInfo(prev => ({ ...prev, progress: next, message }));
           }
-          
-          try {
-            const fileResponse = await fetch(downloadInfo.download_url);
-          if (!fileResponse.ok) {
-              throw new Error(`Failed to download ${downloadInfo.filename}: ${fileResponse.status}`);
-          }
-          
-          let fileBlob = await fileResponse.blob();
-            let finalFilename = downloadInfo.filename;
-          
-          // Decrypt file if it's encrypted and encryption is enabled
-            if (downloadInfo.is_encrypted && downloadInfo.encryption_metadata && encryptionService.isEnabled()) {
-            try {
-                const encryptedFile = new File([fileBlob], downloadInfo.filename, { type: fileBlob.type });
-              const decryptedFile = await encryptionService.decryptFileAfterDownload(
-                encryptedFile,
-                  downloadInfo.encryption_metadata
-              );
-              fileBlob = decryptedFile;
-              finalFilename = decryptedFile.name;
-            } catch (decryptionError) {
-                console.error(`Decryption failed for ${downloadInfo.filename}:`, decryptionError);
-                throw new Error(`Decryption failed for ${downloadInfo.filename}: ${decryptionError.message}`);
+        };
+
+        for (let i = 0; i < downloadUrls.length; i += CONCURRENCY_LIMIT) {
+          const batch = downloadUrls.slice(i, i + CONCURRENCY_LIMIT);
+          const batchPromises = batch.map(async (downloadInfo) => {
+            if (downloadInfo.error) {
+              console.error(`Download failed for ${downloadInfo.filename}: ${downloadInfo.error}`);
+              return;
             }
-            } else if (downloadInfo.is_encrypted && !encryptionService.isEnabled()) {
+            try {
+              const fileResponse = await fetch(downloadInfo.download_url);
+              if (!fileResponse.ok) {
+                throw new Error(`Failed to download ${downloadInfo.filename}: ${fileResponse.status}`);
+              }
+              let fileBlob = await fileResponse.blob();
+              let finalFilename = downloadInfo.filename;
+              if (downloadInfo.is_encrypted && downloadInfo.encryption_metadata && encryptionService.isEnabled()) {
+                try {
+                  const encryptedFile = new File([fileBlob], downloadInfo.filename, { type: fileBlob.type });
+                  const decryptedFile = await encryptionService.decryptFileAfterDownload(
+                    encryptedFile,
+                    downloadInfo.encryption_metadata
+                  );
+                  fileBlob = decryptedFile;
+                  finalFilename = decryptedFile.name;
+                } catch (decryptionError) {
+                  console.error(`Decryption failed for ${downloadInfo.filename}:`, decryptionError);
+                  throw new Error(`Decryption failed for ${downloadInfo.filename}: ${decryptionError.message}`);
+                }
+              } else if (downloadInfo.is_encrypted && !encryptionService.isEnabled()) {
                 throw new Error(`File ${downloadInfo.filename} is encrypted but encryption service is not enabled.`);
-          }
-          
-          // Add file to ZIP with proper path structure
-            const relativePath = downloadInfo.relative_path || '';
-          const zipPath = relativePath ? `${relativePath}/${finalFilename}` : finalFilename;
-          zip.file(zipPath, fileBlob);
-          
-              // Update progress
-              const progress = Math.round(((globalIndex + 1) / downloadUrls.length) * 90);
-              setDownloadInfo(prev => ({
-                ...prev,
-                progress,
-                message: `Processing ${globalIndex + 1}/${downloadUrls.length} files...`
-              }));
-        } catch (fileError) {
-            console.error(`Failed to process ${downloadInfo.filename}:`, fileError);
+              }
+              const relativePath = downloadInfo.relative_path || '';
+              const zipPath = relativePath ? `${relativePath}/${finalFilename}` : finalFilename;
+              zip.file(zipPath, fileBlob);
+              completedFiles += 1;
+              updateProgress(`Processing ${completedFiles}/${downloadUrls.length} files...`);
+            } catch (fileError) {
+              console.error(`Failed to process ${downloadInfo.filename}:`, fileError);
+              completedFiles += 1; // count failures to avoid stalling progress
+              updateProgress(`Processing ${completedFiles}/${downloadUrls.length} files...`);
+            }
+          });
+          await Promise.allSettled(batchPromises);
         }
-        });
-        
-        downloadPromises.push(...batchPromises);
-      }
-      
-      await Promise.all(downloadPromises);
-      
-      // Generate ZIP file
-        setDownloadInfo(prev => ({ ...prev, progress: Math.max(lastProgressRef.current, 95), message: 'Creating ZIP...' }));
-        zipBlob = await zip.generateAsync({ type: 'blob' });
+
+        // Generate ZIP file with progress (90-100%)
+        setDownloadInfo(prev => ({ ...prev, message: 'Creating ZIP...' }));
+        zipBlob = await zip.generateAsync(
+          { type: 'blob' },
+          (metadata) => {
+            const now = Date.now();
+            const next = Math.max(lastProgressRef.current, Math.min(100, 90 + Math.floor(metadata.percent / 10)));
+            if (next > lastProgressRef.current) {
+              lastProgressRef.current = next;
+            }
+            if ((next - lastUiProgress >= 1) || (now - lastUiTime >= 100)) {
+              lastUiProgress = next;
+              lastUiTime = now;
+              setDownloadInfo(prev => ({ ...prev, progress: next, message: 'Finalizing ZIP...' }));
+            }
+          }
+        );
       }
       
       // Download the ZIP file
@@ -840,6 +896,123 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery,
     }
     finally {
       handleBulkDownload.active = false;
+    }
+  };
+
+  const handleServerSideBulkDownload = async (files, hasEncryptedFiles, totalSize) => {
+    try {
+      // Prompt for E2E password if encrypted files exist
+      let encryptionPassword = null;
+      if (hasEncryptedFiles) {
+        encryptionPassword = prompt(
+          'Some files are encrypted. Please enter your encryption password to decrypt them during download:'
+        );
+        if (!encryptionPassword) {
+          alert('Encryption password is required to download encrypted files.');
+          return;
+        }
+      }
+
+      // Show progress dialog
+      setDownloadInfo({
+        filename: `bulk_download_${Date.now()}.zip`,
+        file_size: totalSize,
+        is_encrypted: hasEncryptedFiles,
+        encryption_metadata: null,
+        isBulkDownload: true,
+        fileCount: files.length,
+        progress: 0,
+        message: 'Initiating server-side ZIP preparation...',
+        isServerSide: true
+      });
+      setDownloadDialogOpen(true);
+
+      // Initiate server-side preparation
+      const fileIds = files.map(f => f.id);
+      const response = await mediaAPI.bulkDownloadPrepare(fileIds, encryptionPassword);
+      
+      if (response.data.has_encrypted_files && !encryptionPassword) {
+        alert('Some files are encrypted. Please provide your encryption password.');
+        setDownloadDialogOpen(false);
+        return;
+      }
+
+      const { job_id } = response.data;
+      
+      // Poll for status every 2 seconds
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusResponse = await mediaAPI.bulkDownloadStatus(job_id);
+          const { status, progress, download_url, error_message, message, processed_files, total_files } = statusResponse.data;
+          
+          // Update progress
+          setDownloadInfo(prev => ({
+            ...prev,
+            progress: progress || 0,
+            message: message || `Preparing ZIP... ${progress}%`,
+            processedFiles: processed_files,
+            totalFiles: total_files
+          }));
+          
+          if (status === 'completed') {
+            clearInterval(pollInterval);
+            
+            // Trigger download
+            setDownloadInfo(prev => ({
+              ...prev,
+              progress: 100,
+              message: 'Download ready! Starting download...'
+            }));
+
+            // Use a hidden link to trigger download
+            const link = document.createElement('a');
+            link.href = download_url;
+            link.download = `bulk_download_${Date.now()}.zip`;
+            link.style.display = 'none';
+            document.body.appendChild(link);
+            link.click();
+            
+            setTimeout(() => {
+              document.body.removeChild(link);
+            }, 1000);
+            
+            setDownloadInfo(prev => ({ ...prev, downloadComplete: true }));
+            
+            // Close dialog and clear selection after delay
+            setTimeout(() => {
+              setDownloadDialogOpen(false);
+              clearSelection();
+            }, 3000);
+            
+          } else if (status === 'failed') {
+            clearInterval(pollInterval);
+            setDownloadDialogOpen(false);
+            alert(`Download preparation failed: ${error_message || 'Unknown error'}`);
+          }
+        } catch (pollError) {
+          clearInterval(pollInterval);
+          console.error('Status poll failed:', pollError);
+          setDownloadDialogOpen(false);
+          alert('Failed to check download status. Please try again.');
+        }
+      }, 2000); // Poll every 2 seconds
+      
+      // Set timeout to stop polling after 2 hours
+      setTimeout(() => {
+        clearInterval(pollInterval);
+        if (downloadDialogOpen) {
+          setDownloadDialogOpen(false);
+          alert('Download preparation timed out. Please try again or contact support.');
+        }
+      }, 2 * 60 * 60 * 1000); // 2 hours
+      
+    } catch (error) {
+      setDownloadDialogOpen(false);
+      if (error.response?.data?.error) {
+        alert(`Failed to prepare download: ${error.response.data.error}`);
+      } else {
+        alert(`Failed to prepare download: ${error.message}`);
+      }
     }
   };
 
@@ -890,6 +1063,11 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery,
     }
     
     const fileIds = allFilesToDelete.map(file => file.id);
+    const totalFiles = fileIds.length;
+    const totalSizeBytes = allFilesToDelete.reduce(
+      (sum, f) => sum + (f.file_size || 0),
+      0
+    );
     
     // Add delete operation to global upload manager
     const deleteOperationId = uploadManager.addDeleteOperation(fileIds, 'delete');
@@ -906,6 +1084,17 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery,
         [file.id]: { status: 'pending', progress: 0 }
       }));
     });
+    
+    // Create backend batch job for unified delete progress
+    let deleteBatchId = null;
+    try {
+      const batchResp = await batchAPI.createBatch('delete', totalFiles, totalSizeBytes);
+      deleteBatchId = batchResp?.data?.id || null;
+      setActiveBatchId(deleteBatchId);
+      setActiveBatchOperation('delete');
+    } catch (_e) {
+      // Non-fatal; we still keep local progress
+    }
     
     try {
       // Update delete operation status
@@ -944,7 +1133,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery,
           });
           
           // Use the bulk delete endpoint for this batch
-          const response = await mediaAPI.bulkDeleteFiles(batch);
+          const response = await mediaAPI.bulkDeleteFiles(batch, deleteBatchId, totalFiles);
           const { summary, failed_files } = response.data;
           
           totalDeleted += summary.successfully_deleted;
@@ -1678,15 +1867,41 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery,
           handleBulkDelete={handleBulkDelete}
         />
 
-        {/* Global Compact Upload Progress - Memoized for Performance */}
-        <UploadProgressBar uploadManagerState={uploadManagerState} files={files} />
+      {/* Backend-driven batch progress for upload/hibernate/restore/delete */}
+      {activeBatchId && (
+        <Box sx={{ px: { xs: 2, md: 3 }, pt: 1 }}>
+          <Paper sx={{ p: 2, border: '1px solid #e0e0e0' }}>
+            <Stack direction="row" alignItems="center" spacing={2}>
+              {activeBatchOperation === 'upload' ? (
+                <CloudUpload sx={{ color: '#60a5fa' }} />
+              ) : (
+                <AcUnit sx={{ color: '#60a5fa' }} />
+              )}
+              <Box sx={{ flex: 1 }}>
+                <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                  {activeBatchOperation === 'upload' && '📤 Uploading files'}
+                  {activeBatchOperation === 'hibernate' && '❄️ Hibernating files'}
+                  {activeBatchOperation === 'restore' && '☀️ Waking up files'}
+                  {activeBatchOperation === 'delete' && '🗑️ Deleting files'}
+                  {` (${operationBatchProgress || 0}%)`}
+                </Typography>
+                <LinearProgress 
+                  variant="determinate" 
+                  value={operationBatchProgress || 0} 
+                  sx={{ mt: 1, height: 6, borderRadius: 3 }} 
+                />
+              </Box>
+            </Stack>
+          </Paper>
+        </Box>
+      )}
 
-        {/* Enhanced Delete Progress */}
-        <BulkOperationProgress 
-          uploadManagerState={uploadManagerState}
-          bulkOperationStatus={bulkOperationStatus}
-          bulkOperationType={bulkOperationType}
-        />
+      {/* Existing fine-grained BulkOperationProgress (per-file) */}
+      <BulkOperationProgress 
+        uploadManagerState={uploadManagerState}
+        bulkOperationStatus={bulkOperationStatus}
+        bulkOperationType={bulkOperationType}
+      />
 
         {/* File Grid/List or Upload Area */}
       <Box sx={{ flex: 1, overflow: 'auto', pt: { xs: 2, md: 3 }, pr: { xs: 2, md: 2 }, pb: { xs: 2, md: 3 }, pl: { xs: 2, md: 3 } }}>
@@ -1727,6 +1942,7 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery,
                   setShowUploadArea(false);
                   setOverallUploadProgress(0);
                   setOverallUploadLabel('');
+                  setActiveBatchId(null);
                   loadFiles(true); // Refresh the file list with cache busting
                 }}
                 onUploadProgress={(progress, fileName) => {
@@ -1734,11 +1950,15 @@ const DataHibernateManager = ({ onFileSelect, onFolderSelect, globalSearchQuery,
                     ...prev,
                     [fileName]: progress
                   }));
-                  // Heuristic: DirectoryUploader sends overall label like "12/49 files"
+                  // Legacy heuristic kept for compatibility, but main bar now uses backend batch
                   if (typeof fileName === 'string' && fileName.includes('files')) {
                     setOverallUploadProgress(Math.round(progress));
                     setOverallUploadLabel(fileName);
                   }
+                }}
+                onBatchCreated={(batchId) => {
+                  setActiveBatchId(batchId);
+                  setActiveBatchOperation('upload');
                 }}
                 // Pass the current folder as the upload destination
                 defaultRelativePath={currentFolder === 'root' ? '' : currentFolder}

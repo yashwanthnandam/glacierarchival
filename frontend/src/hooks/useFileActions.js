@@ -113,6 +113,13 @@ export const useFileActions = (onRefresh, forceRefresh = false) => {
 
   // Handle restore with thematic dialog
   const handleRestore = async (file) => {
+    // Check if file can be restored individually
+    if (file.can_restore_individually === false) {
+      const message = `This file is part of archive bundle "${file.bundle_name}".\n\nFiles in bundles can only be restored as a complete bundle, not individually.\n\nPlease restore the entire bundle to access this file.`;
+      alert(message);
+      return { success: false, message: 'File is part of a bundle' };
+    }
+    
     setRestoreFile(file);
     setRestoreDialogOpen(true);
     return { success: true, message: 'Restore dialog opened' };

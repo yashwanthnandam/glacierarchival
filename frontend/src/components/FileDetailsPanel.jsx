@@ -235,6 +235,10 @@ const FileDetailsPanel = memo(({
               variant="outlined"
               startIcon={<WbSunny />}
               onClick={async () => {
+                if (selectedFile.can_restore_individually === false) {
+                  alert(`This file is part of archive bundle "${selectedFile.bundle_name}".\n\nFiles in bundles can only be restored as a complete bundle.\n\nPlease restore the entire bundle to access this file.`);
+                  return;
+                }
                 try {
                   await handleRestore(selectedFile);
                   await loadFiles(true);
@@ -242,11 +246,12 @@ const FileDetailsPanel = memo(({
                   console.error('Wake failed:', error);
                 }
               }}
+              disabled={selectedFile.can_restore_individually === false}
               sx={{
                 textTransform: 'none',
                 fontWeight: 600,
-                color: '#fbbf24',
-                borderColor: '#fbbf24',
+                color: selectedFile.can_restore_individually === false ? 'text.disabled' : '#fbbf24',
+                borderColor: selectedFile.can_restore_individually === false ? 'action.disabled' : '#fbbf24',
               }}
             >
               Wake Up
